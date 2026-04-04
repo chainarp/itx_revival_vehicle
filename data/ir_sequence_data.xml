@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- Assessment Sequence -->
+        <record id="seq_revival_assessment" model="ir.sequence">
+            <field name="name">Revival Assessment</field>
+            <field name="code">itx.revival.assessment</field>
+            <field name="prefix">ASM/%(year)s/</field>
+            <field name="padding">4</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
+        <!-- Acquired Vehicle Sequence -->
+        <record id="seq_revival_acquired" model="ir.sequence">
+            <field name="name">Revival Acquired</field>
+            <field name="code">itx.revival.acquired</field>
+            <field name="prefix">ACQ/%(year)s/</field>
+            <field name="padding">4</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
+    </data>
+</odoo>

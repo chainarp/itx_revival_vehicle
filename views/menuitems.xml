@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Main Menu -->
+    <menuitem id="menu_revival_vehicle_root"
+              name="Revival Vehicle"
+              sequence="45"/>
+
+    <!-- Operations Menu -->
+    <menuitem id="menu_revival_operations"
+              name="Operations"
+              parent="menu_revival_vehicle_root"
+              sequence="10"/>
+
+    <menuitem id="menu_revival_assessment"
+              name="Assessments"
+              parent="menu_revival_operations"
+              action="itx_revival_assessment_action"
+              sequence="10"/>
+
+    <menuitem id="menu_revival_acquired"
+              name="Acquired Vehicles"
+              parent="menu_revival_operations"
+              action="itx_revival_acquired_action"
+              sequence="20"/>
+
+    <!-- Reports Menu -->
+    <menuitem id="menu_revival_reports"
+              name="Reports"
+              parent="menu_revival_vehicle_root"
+              sequence="50"/>
+
+    <!-- Configuration uses itx_info_vehicle's config -->
+
+</odoo>

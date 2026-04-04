@@ -1,0 +1,9 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_itx_revival_assessment_user,itx.revival.assessment.user,model_itx_revival_assessment,stock.group_stock_user,1,0,0,0
+access_itx_revival_assessment_manager,itx.revival.assessment.manager,model_itx_revival_assessment,stock.group_stock_manager,1,1,1,1
+access_itx_revival_assessment_line_user,itx.revival.assessment.line.user,model_itx_revival_assessment_line,stock.group_stock_user,1,0,0,0
+access_itx_revival_assessment_line_manager,itx.revival.assessment.line.manager,model_itx_revival_assessment_line,stock.group_stock_manager,1,1,1,1
+access_itx_revival_acquired_user,itx.revival.acquired.user,model_itx_revival_acquired,stock.group_stock_user,1,0,0,0
+access_itx_revival_acquired_manager,itx.revival.acquired.manager,model_itx_revival_acquired,stock.group_stock_manager,1,1,1,1
+access_itx_revival_acquired_image_user,itx.revival.acquired.image.user,model_itx_revival_acquired_image,stock.group_stock_user,1,0,0,0
+access_itx_revival_acquired_image_manager,itx.revival.acquired.image.manager,model_itx_revival_acquired_image,stock.group_stock_manager,1,1,1,1
