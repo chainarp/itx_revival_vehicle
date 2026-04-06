@@ -270,24 +270,21 @@ class ItxRevivalAcquired(models.Model):
         if self.analytic_account_id:
             return
 
-        # Get or create analytic plan
-        plan = self.env['account.analytic.plan'].search([
-            ('name', 'ilike', 'Revival')
-        ], limit=1)
+        # Use sudo for analytic (requires accounting group)
+        AnalyticPlan = self.env['account.analytic.plan'].sudo()
+        AnalyticAccount = self.env['account.analytic.account'].sudo()
 
+        plan = AnalyticPlan.search([('name', 'ilike', 'Revival')], limit=1)
         if not plan:
-            plan = self.env['account.analytic.plan'].create({
-                'name': 'Revival Vehicle',
-            })
+            plan = AnalyticPlan.create({'name': 'Revival Vehicle'})
 
-        # Create analytic account
-        display_name = f"{self.name}"
+        display_name = self.name
         if self.spec_id:
             display_name += f" - {self.spec_id.full_name}"
         if self.vehicle_year:
             display_name += f" {self.vehicle_year}"
 
-        analytic = self.env['account.analytic.account'].create({
+        analytic = AnalyticAccount.create({
             'name': display_name,
             'plan_id': plan.id,
         })
@@ -308,10 +305,40 @@ class ItxRevivalAcquired(models.Model):
         if not self.purchase_price:
             raise UserError('กรุณาระบุ Purchase Price ก่อน')
 
-        # TODO: Create product for the vehicle if not exists
-        # TODO: Create PO
+        # Get salvage vehicle product from assessment's spec-level BOM
+        if not self.product_id:
+            bom = self.env['mrp.bom'].search([
+                ('itx_spec_id', '=', self.spec_id.id),
+            ], limit=1)
+            if bom and bom.product_id:
+                self.product_id = bom.product_id.id
+            else:
+                raise UserError('ไม่พบ Vehicle Product กรุณา Generate Lines ใน Assessment ก่อน')
 
-        raise UserError('สร้าง PO ยังไม่พร้อมใช้งาน')
+        # Create PO
+        po = self.env['purchase.order'].create({
+            'partner_id': self.vendor_id.id,
+            'date_order': self.purchase_date or fields.Date.context_today(self),
+            'origin': self.name,
+        })
+
+        self.env['purchase.order.line'].create({
+            'order_id': po.id,
+            'product_id': self.product_id.id,
+            'name': f'{self.product_id.display_name} - VIN: {self.vin}',
+            'product_qty': 1,
+            'price_unit': self.purchase_price,
+        })
+
+        # Link analytic if available
+        if self.analytic_account_id:
+            for line in po.order_line:
+                line.analytic_distribution = {str(self.analytic_account_id.id): 100}
+
+        self.write({
+            'purchase_order_id': po.id,
+            'state': 'purchased',
+        })
 
     def action_confirm_stock(self):
         """Confirm vehicle received in stock"""

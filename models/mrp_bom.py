@@ -6,6 +6,12 @@ from odoo import api, fields, models
 class MrpBom(models.Model):
     _inherit = 'mrp.bom'
 
+    itx_spec_id = fields.Many2one(
+        comodel_name='itx.info.vehicle.spec',
+        string='Vehicle Spec',
+        index=True,
+        help='Spec-level BOM (master data)',
+    )
     itx_acquired_id = fields.Many2one(
         comodel_name='itx.revival.acquired',
         string='Acquired Vehicle',

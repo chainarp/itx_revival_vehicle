@@ -3,14 +3,6 @@
 from odoo import api, fields, models
 
 
-CONDITION_SELECTION = [
-    ('good', 'Good (ดี)'),
-    ('fair', 'Fair (พอใช้)'),
-    ('poor', 'Poor (แย่)'),
-    ('missing', 'Missing (ไม่มี)'),
-]
-
-
 class ItxRevivalAssessmentLine(models.Model):
     _name = 'itx.revival.assessment.line'
     _description = 'Vehicle Revival Assessment Line'
@@ -43,10 +35,36 @@ class ItxRevivalAssessmentLine(models.Model):
         store=True,
     )
     product_id = fields.Many2one(
-        comodel_name='product.template',
+        comodel_name='product.product',
         string='Product',
         index=True,
-        help='Product ที่ generate/lookup ได้',
+        help='Product จาก spec-level BOM',
+    )
+
+    # === Origin & Condition ===
+    part_origin_id = fields.Many2one(
+        comodel_name='itx.info.vehicle.part.origin',
+        string='Part Origin',
+        related='product_id.itx_part_origin_id',
+        store=True,
+    )
+    part_condition_id = fields.Many2one(
+        comodel_name='itx.info.vehicle.part.condition',
+        string='Part Condition',
+        related='product_id.itx_condition_id',
+        store=True,
+    )
+
+    # === Quantity ===
+    qty_expected = fields.Integer(
+        string='Qty Expected',
+        default=1,
+        help='จำนวนที่คาดว่ามี (จาก BOM)',
+    )
+    qty_found = fields.Integer(
+        string='Qty Found',
+        default=1,
+        help='จำนวนที่สายสืบเจอจริง',
     )
 
     # === Pricing ===
@@ -59,14 +77,13 @@ class ItxRevivalAssessmentLine(models.Model):
         string='Cost Weight (%)',
         digits=(5, 2),
         default=0,
-        help='% สัดส่วนต้นทุน (ใช้ตอน Unbuild)',
+        help='% สัดส่วนต้นทุน',
     )
     allocated_cost = fields.Float(
         string='Allocated Cost',
         compute='_compute_allocated_cost',
         store=True,
         digits='Product Price',
-        help='ต้นทุนที่กระจายให้ชิ้นนี้',
     )
 
     # === Field Survey ===
@@ -75,28 +92,25 @@ class ItxRevivalAssessmentLine(models.Model):
         default=True,
         help='สายสืบเจอหรือไม่',
     )
-    actual_condition = fields.Selection(
-        selection=CONDITION_SELECTION,
+    actual_condition_id = fields.Many2one(
+        comodel_name='itx.info.vehicle.part.condition',
         string='Actual Condition',
-        help='สภาพจริงจากหน้างาน',
+        index=True,
+        help='สภาพจริงจากหน้างาน (สายสืบกรอก)',
     )
     field_note = fields.Char(
         string='Field Note',
         help='หมายเหตุจากหน้างาน',
     )
 
-    # === Related Fields ===
+    # === Related ===
     spec_id = fields.Many2one(
         related='assessment_id.spec_id',
         store=True,
         index=True,
     )
-    body_type_id = fields.Many2one(
-        related='assessment_id.body_type_id',
-        store=True,
-    )
 
-    # === Compute Methods ===
+    # === Compute ===
     @api.depends('cost_weight', 'assessment_id.target_price',
                  'assessment_id.line_ids', 'assessment_id.line_ids.cost_weight')
     def _compute_allocated_cost(self):
@@ -112,10 +126,10 @@ class ItxRevivalAssessmentLine(models.Model):
             else:
                 rec.allocated_cost = 0
 
-    # === Onchange Methods ===
+    # === Onchange ===
     @api.onchange('is_found')
     def _onchange_is_found(self):
-        """If not found, set condition to missing"""
         if not self.is_found:
-            self.actual_condition = 'missing'
+            self.actual_condition_id = False
+            self.qty_found = 0
             self.expected_price = 0
