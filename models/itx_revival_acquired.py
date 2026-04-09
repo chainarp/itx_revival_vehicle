@@ -233,14 +233,19 @@ class ItxRevivalAcquired(models.Model):
 
     @api.depends('total_cost')
     def _compute_actual_values(self):
-        """Compute actual revenue from sold parts"""
+        """Compute actual revenue from sold parts.
+        TODO: Calculate from sale.order.line linked via lot → acquired
+        Until sales exist, all values stay 0.
+        """
         for rec in self:
-            # TODO: Calculate from sale.order.line linked to this acquired
+            # TODO: sum sale.order.line amounts where lot.itx_acquired_id == rec
             rec.actual_revenue = 0
-            rec.actual_profit = rec.actual_revenue - rec.total_cost
-            if rec.total_cost:
-                rec.actual_roi = (rec.actual_profit / rec.total_cost) * 100
+            if rec.actual_revenue:
+                rec.actual_profit = rec.actual_revenue - rec.total_cost
+                rec.actual_roi = (rec.actual_profit / rec.total_cost * 100) if rec.total_cost else 0
             else:
+                # No sales yet — don't show misleading negative values
+                rec.actual_profit = 0
                 rec.actual_roi = 0
             rec.sold_percentage = 0
 

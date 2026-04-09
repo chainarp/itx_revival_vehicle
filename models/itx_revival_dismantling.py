@@ -236,17 +236,20 @@ class ItxRevivalDismantling(models.Model):
             self.acquired_id.state = 'completed'
 
     def _get_or_create_part_product(self, part_template, origin, condition):
-        """Lookup or create product.product for spec + part + origin + condition"""
+        """Lookup or create product.product variant for spec + part + origin × condition.
+
+        Uses product.template UK (spec, part_name) + dynamic variant for origin × condition.
+        """
         if not origin or not condition:
             return False
 
         ProductTemplate = self.env['product.template']
+
+        # Find or create template by (spec, part_name)
         domain = [
             ('itx_is_vehicle_part', '=', True),
             ('itx_spec_id', '=', self.spec_id.id),
             ('itx_part_name_id', '=', part_template.id),
-            ('itx_part_origin_id', '=', origin.id),
-            ('itx_condition_id', '=', condition.id),
         ]
         tmpl = ProductTemplate.search(domain, limit=1)
         if not tmpl:
@@ -256,15 +259,15 @@ class ItxRevivalDismantling(models.Model):
                 'itx_spec_id': self.spec_id.id,
                 'itx_part_name_id': part_template.id,
                 'itx_part_category_id': part_template.category_id.id if part_template.category_id else False,
-                'itx_part_origin_id': origin.id,
-                'itx_condition_id': condition.id,
                 'type': 'consu',
                 'is_storable': True,
                 'tracking': 'lot',
                 'sale_ok': True,
                 'purchase_ok': False,
             })
-        return tmpl.product_variant_id
+
+        # Create/find variant
+        return tmpl._get_or_create_variant(origin, condition)
 
     def action_view_unbuild(self):
         self.ensure_one()

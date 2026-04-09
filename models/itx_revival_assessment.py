@@ -232,11 +232,14 @@ class ItxRevivalAssessment(models.Model):
         default_weight = 100.0 / total_lines if total_lines else 0
 
         for seq, bom_line in enumerate(bom.bom_line_ids, start=1):
+            origin, condition = self._get_origin_condition_from_variant(bom_line.product_id)
             lines_data.append({
                 'assessment_id': self.id,
                 'sequence': seq * 10,
                 'part_name_id': bom_line.product_id.itx_part_name_id.id,
                 'product_id': bom_line.product_id.id,
+                'part_origin_id': origin.id if origin else False,
+                'part_condition_id': condition.id if condition else False,
                 'qty_expected': int(bom_line.product_qty) or 1,
                 'qty_found': int(bom_line.product_qty) or 1,
                 'expected_price': 0.0,
@@ -280,11 +283,13 @@ class ItxRevivalAssessment(models.Model):
                 f'ไม่พบ BOM Template สำหรับ Body Type: {self.body_type_id.name}'
             )
 
-        # Fallback origin/condition
+        # Fallback origin/condition — use is_default from master data
         PartOrigin = self.env['itx.info.vehicle.part.origin']
         PartCondition = self.env['itx.info.vehicle.part.condition']
-        fallback_origin = PartOrigin.search([('code', '=', 'OEM')], limit=1)
-        fallback_condition = PartCondition.search([('code', '=', 'FAIR')], limit=1)
+        fallback_origin = PartOrigin.search([('is_default', '=', True)], limit=1) \
+            or PartOrigin.search([('code', '=', 'OEM')], limit=1)
+        fallback_condition = PartCondition.search([('is_default', '=', True)], limit=1) \
+            or PartCondition.search([('code', '=', 'GOOD')], limit=1)
 
         # Create salvage vehicle product (spec level)
         salvage_product = self._get_or_create_salvage_product()
@@ -342,28 +347,36 @@ class ItxRevivalAssessment(models.Model):
                 'category_id': cat.id,
             })
 
-        origin = PartOrigin.search([('code', '=', 'OEM')], limit=1)
-        condition = PartCondition.search([('code', '=', 'GOOD')], limit=1)
+        origin = PartOrigin.search([('is_default', '=', True)], limit=1) \
+            or PartOrigin.search([('code', '=', 'OEM')], limit=1)
+        condition = PartCondition.search([('is_default', '=', True)], limit=1) \
+            or PartCondition.search([('code', '=', 'GOOD')], limit=1)
 
         if not origin or not condition:
-            raise UserError('ไม่พบ Part Origin (OEM) หรือ Part Condition (GOOD) ใน master data')
+            raise UserError('ไม่พบ Part Origin หรือ Part Condition ที่เป็น default ใน master data')
 
         # Use standard vehicle part lookup (UK: spec + part_name + origin + condition)
         return self._get_or_create_part_product(salvage_part, origin, condition)
 
     def _get_or_create_part_product(self, part_template, origin, condition):
-        """Lookup or create product.product for spec + part + origin + condition"""
+        """Lookup or create product.product variant for spec + part + origin × condition.
+
+        Step 1: Find/create product.template by UK (spec, part_name)
+        Step 2: Ensure dynamic attributes (Origin + Condition) on template
+        Step 3: Create/find variant for origin × condition combination
+        Return: product.product (variant)
+        """
         self.ensure_one()
         if not origin or not condition:
             return False
 
         ProductTemplate = self.env['product.template']
+
+        # Step 1: Find or create template by (spec, part_name)
         domain = [
             ('itx_is_vehicle_part', '=', True),
             ('itx_spec_id', '=', self.spec_id.id),
             ('itx_part_name_id', '=', part_template.id),
-            ('itx_part_origin_id', '=', origin.id),
-            ('itx_condition_id', '=', condition.id),
         ]
         tmpl = ProductTemplate.search(domain, limit=1)
         if not tmpl:
@@ -373,15 +386,15 @@ class ItxRevivalAssessment(models.Model):
                 'itx_spec_id': self.spec_id.id,
                 'itx_part_name_id': part_template.id,
                 'itx_part_category_id': part_template.category_id.id if part_template.category_id else False,
-                'itx_part_origin_id': origin.id,
-                'itx_condition_id': condition.id,
                 'type': 'consu',
                 'is_storable': True,
                 'tracking': 'lot',
                 'sale_ok': True,
                 'purchase_ok': False,
             })
-        return tmpl.product_variant_id
+
+        # Step 2+3: Create/find variant via template helper
+        return tmpl._get_or_create_variant(origin, condition)
 
     # === State Actions ===
     def action_start_preparing(self):
@@ -479,11 +492,14 @@ class ItxRevivalAssessment(models.Model):
         default_weight = 100.0 / total_lines if total_lines else 0
 
         for seq, bom_line in enumerate(self.bom_id.bom_line_ids, start=1):
+            origin, condition = self._get_origin_condition_from_variant(bom_line.product_id)
             lines_data.append({
                 'assessment_id': self.id,
                 'sequence': seq * 10,
                 'part_name_id': bom_line.product_id.itx_part_name_id.id,
                 'product_id': bom_line.product_id.id,
+                'part_origin_id': origin.id if origin else False,
+                'part_condition_id': condition.id if condition else False,
                 'qty_expected': int(bom_line.product_qty) or 1,
                 'qty_found': int(bom_line.product_qty) or 1,
                 'expected_price': 0.0,
@@ -519,3 +535,29 @@ class ItxRevivalAssessment(models.Model):
             'domain': [('assessment_id', '=', self.id)],
             'context': {'default_assessment_id': self.id},
         }
+
+    # === Variant Helpers ===
+    def _get_origin_condition_from_variant(self, product_product):
+        """Extract origin/condition master records from a product.product variant.
+
+        Traces: variant → attribute_values → origin/condition master data
+        via attribute_value_id field on part.origin / part.condition.
+
+        :param product_product: product.product record (variant)
+        :return: tuple (origin_record, condition_record)
+        """
+        PartOrigin = self.env['itx.info.vehicle.part.origin']
+        PartCondition = self.env['itx.info.vehicle.part.condition']
+
+        attr_value_ids = product_product.product_template_attribute_value_ids.mapped(
+            'product_attribute_value_id'
+        )
+
+        origin = PartOrigin.search([
+            ('attribute_value_id', 'in', attr_value_ids.ids),
+        ], limit=1)
+        condition = PartCondition.search([
+            ('attribute_value_id', 'in', attr_value_ids.ids),
+        ], limit=1)
+
+        return origin, condition

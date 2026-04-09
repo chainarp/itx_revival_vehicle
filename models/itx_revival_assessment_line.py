@@ -41,18 +41,18 @@ class ItxRevivalAssessmentLine(models.Model):
         help='Product จาก spec-level BOM',
     )
 
-    # === Origin & Condition ===
+    # === Origin & Condition (stored, set during line creation) ===
     part_origin_id = fields.Many2one(
         comodel_name='itx.info.vehicle.part.origin',
         string='Part Origin',
-        related='product_id.itx_part_origin_id',
-        store=True,
+        index=True,
+        help='Part origin (set from BOM default origin)',
     )
     part_condition_id = fields.Many2one(
         comodel_name='itx.info.vehicle.part.condition',
         string='Part Condition',
-        related='product_id.itx_condition_id',
-        store=True,
+        index=True,
+        help='Part condition (set from BOM default condition)',
     )
 
     # === Quantity ===

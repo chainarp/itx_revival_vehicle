@@ -31,9 +31,8 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
     'depends': [
         'itx_info_vehicle',
         'mrp',
-        'purchase',
+        'purchase_stock',
         'account',
-        'stock',
     ],
     'data': [
         # Security
@@ -49,6 +48,6 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
     ],
     'demo': [],
     'installable': True,
-    'application': True,
+    'application': False,
     'auto_install': False,
 }
