@@ -239,7 +239,7 @@ class ItxRevivalAssessment(models.Model):
                 'product_id': bom_line.product_id.id,
                 'qty_expected': int(bom_line.product_qty) or 1,
                 'qty_found': int(bom_line.product_qty) or 1,
-                'expected_price': bom_line.itx_expected_price or 0.0,
+                'expected_price': 0.0,
                 'cost_weight': bom_line.itx_cost_weight or default_weight,
                 'is_found': True,
             })
@@ -311,33 +311,45 @@ class ItxRevivalAssessment(models.Model):
                     'bom_id': bom.id,
                     'product_id': product.id,
                     'product_qty': tmpl.qty or 1,
-                    'itx_cost_weight': default_weight,
-                    'itx_expected_price': 0.0,
+                    'itx_cost_weight': tmpl.cost_weight or default_weight,
                 })
 
         return bom
 
     def _get_or_create_salvage_product(self):
-        """Get or create salvage vehicle product at spec level"""
+        """Get or create salvage vehicle product as vehicle part (UK applies)"""
         self.ensure_one()
-        Product = self.env['product.product']
+        TemplatePart = self.env['itx.info.vehicle.template.part']
+        PartOrigin = self.env['itx.info.vehicle.part.origin']
+        PartCondition = self.env['itx.info.vehicle.part.condition']
 
-        # Search existing
-        product = Product.search([
-            ('name', '=like', f'%{self.spec_id.full_name}% (Salvage)'),
-            ('type', '=', 'product'),
-        ], limit=1)
-        if product:
-            return product
+        # Get or create "Salvage Vehicle" template part
+        salvage_part = TemplatePart.search([('code', '=', 'SALVAGE')], limit=1)
+        if not salvage_part:
+            # Find or create category
+            PartCategory = self.env['itx.info.vehicle.part.category']
+            cat = PartCategory.search([('code', '=', 'VEHICLE')], limit=1)
+            if not cat:
+                cat = PartCategory.create({
+                    'code': 'VEHICLE',
+                    'name': 'Vehicle (ตัวรถ)',
+                    'abbr': 'VH',
+                })
+            salvage_part = TemplatePart.create({
+                'code': 'SALVAGE',
+                'name': 'Salvage Vehicle (ซากรถ)',
+                'abbr': 'SAL',
+                'category_id': cat.id,
+            })
 
-        tmpl = self.env['product.template'].create({
-            'name': f'{self.spec_id.full_name} (Salvage)',
-            'type': 'consu',
-            'sale_ok': False,
-            'purchase_ok': True,
-            'itx_is_vehicle_part': False,
-        })
-        return tmpl.product_variant_id
+        origin = PartOrigin.search([('code', '=', 'OEM')], limit=1)
+        condition = PartCondition.search([('code', '=', 'GOOD')], limit=1)
+
+        if not origin or not condition:
+            raise UserError('ไม่พบ Part Origin (OEM) หรือ Part Condition (GOOD) ใน master data')
+
+        # Use standard vehicle part lookup (UK: spec + part_name + origin + condition)
+        return self._get_or_create_part_product(salvage_part, origin, condition)
 
     def _get_or_create_part_product(self, part_template, origin, condition):
         """Lookup or create product.product for spec + part + origin + condition"""
@@ -364,6 +376,8 @@ class ItxRevivalAssessment(models.Model):
                 'itx_part_origin_id': origin.id,
                 'itx_condition_id': condition.id,
                 'type': 'consu',
+                'is_storable': True,
+                'tracking': 'lot',
                 'sale_ok': True,
                 'purchase_ok': False,
             })
@@ -472,7 +486,7 @@ class ItxRevivalAssessment(models.Model):
                 'product_id': bom_line.product_id.id,
                 'qty_expected': int(bom_line.product_qty) or 1,
                 'qty_found': int(bom_line.product_qty) or 1,
-                'expected_price': bom_line.itx_expected_price or 0.0,
+                'expected_price': 0.0,
                 'cost_weight': bom_line.itx_cost_weight or default_weight,
                 'is_found': True,
             })

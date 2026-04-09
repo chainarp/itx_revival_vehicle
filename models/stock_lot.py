@@ -3,17 +3,17 @@
 from odoo import fields, models
 
 
-class MrpUnbuild(models.Model):
-    _inherit = 'mrp.unbuild'
+class StockLot(models.Model):
+    _inherit = 'stock.lot'
 
+    itx_vin = fields.Char(
+        string='VIN',
+        index=True,
+        help='VIN ของซากรถที่ part นี้มา',
+    )
     itx_acquired_id = fields.Many2one(
         comodel_name='itx.revival.acquired',
         string='Acquired Vehicle',
         index=True,
         help='ผูกกับรถคันไหน',
-    )
-    itx_dismantling_id = fields.Many2one(
-        comodel_name='itx.revival.dismantling',
-        string='Dismantling Order',
-        index=True,
     )

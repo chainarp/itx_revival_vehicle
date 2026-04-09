@@ -15,8 +15,8 @@
             <!-- Add itx fields after product_qty in BOM line list -->
             <xpath expr="//field[@name='bom_line_ids']//list//field[@name='product_qty']" position="after">
                 <field name="itx_cost_weight" optional="show"/>
-                <field name="itx_expected_price" optional="show"/>
-                <field name="itx_allocated_cost" optional="show"/>
+                <field name="itx_total_weight" optional="show"/>
+                <field name="itx_weight_status" optional="show"/>
             </xpath>
         </field>
     </record>

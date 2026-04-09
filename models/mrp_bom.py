@@ -12,12 +12,6 @@ class MrpBom(models.Model):
         index=True,
         help='Spec-level BOM (master data)',
     )
-    itx_acquired_id = fields.Many2one(
-        comodel_name='itx.revival.acquired',
-        string='Acquired Vehicle',
-        index=True,
-        help='ผูกกับรถคันไหน',
-    )
 
 
 class MrpBomLine(models.Model):
@@ -28,35 +22,29 @@ class MrpBomLine(models.Model):
         digits=(5, 2),
         help='% สัดส่วนต้นทุน',
     )
-    itx_allocated_cost = fields.Float(
-        string='Allocated Cost',
-        compute='_compute_itx_allocated_cost',
-        store=True,
-        digits='Product Price',
-        help='ต้นทุนที่กระจายให้ชิ้นนี้',
+    itx_total_weight = fields.Float(
+        string='Total Weight',
+        compute='_compute_itx_total_weight',
+        digits=(5, 2),
     )
-    itx_expected_price = fields.Float(
-        string='Expected Price',
-        digits='Product Price',
-        help='ราคาขายที่คาดการณ์',
+    itx_weight_status = fields.Char(
+        string='Status',
+        compute='_compute_itx_total_weight',
     )
 
-    @api.depends('itx_cost_weight', 'bom_id.itx_acquired_id',
-                 'bom_id.itx_acquired_id.total_cost')
-    def _compute_itx_allocated_cost(self):
+    @api.depends('itx_cost_weight', 'bom_id.bom_line_ids.itx_cost_weight')
+    def _compute_itx_total_weight(self):
         for rec in self:
-            if (rec.bom_id and rec.bom_id.itx_acquired_id and
-                    rec.bom_id.itx_acquired_id.total_cost):
-                # Get total weight from all lines
-                total_weight = sum(
-                    rec.bom_id.bom_line_ids.mapped('itx_cost_weight')
-                )
-                if total_weight:
-                    rec.itx_allocated_cost = (
-                        rec.bom_id.itx_acquired_id.total_cost *
-                        rec.itx_cost_weight / total_weight
-                    )
+            if rec.bom_id:
+                total = sum(rec.bom_id.bom_line_ids.mapped('itx_cost_weight'))
+                rec.itx_total_weight = total
+                diff = total - 100
+                if abs(diff) < 0.01:
+                    rec.itx_weight_status = '✓ 100%'
+                elif diff < 0:
+                    rec.itx_weight_status = f'{diff:.2f}%'
                 else:
-                    rec.itx_allocated_cost = 0
+                    rec.itx_weight_status = f'+{diff:.2f}%'
             else:
-                rec.itx_allocated_cost = 0
+                rec.itx_total_weight = 0
+                rec.itx_weight_status = ''

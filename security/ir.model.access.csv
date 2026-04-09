@@ -7,3 +7,7 @@ access_itx_revival_acquired_user,itx.revival.acquired.user,model_itx_revival_acq
 access_itx_revival_acquired_manager,itx.revival.acquired.manager,model_itx_revival_acquired,stock.group_stock_manager,1,1,1,1
 access_itx_revival_acquired_image_user,itx.revival.acquired.image.user,model_itx_revival_acquired_image,stock.group_stock_user,1,0,0,0
 access_itx_revival_acquired_image_manager,itx.revival.acquired.image.manager,model_itx_revival_acquired_image,stock.group_stock_manager,1,1,1,1
+access_itx_revival_dismantling_user,itx.revival.dismantling.user,model_itx_revival_dismantling,stock.group_stock_user,1,0,0,0
+access_itx_revival_dismantling_manager,itx.revival.dismantling.manager,model_itx_revival_dismantling,stock.group_stock_manager,1,1,1,1
+access_itx_revival_dismantling_line_user,itx.revival.dismantling.line.user,model_itx_revival_dismantling_line,stock.group_stock_user,1,0,0,0
+access_itx_revival_dismantling_line_manager,itx.revival.dismantling.line.manager,model_itx_revival_dismantling_line,stock.group_stock_manager,1,1,1,1

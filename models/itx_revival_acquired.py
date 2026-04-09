@@ -157,16 +157,13 @@ class ItxRevivalAcquired(models.Model):
         string='Vehicle Product',
         help='ตัวซากรถเป็น product (ใช้กับ Unbuild)',
     )
-    bom_id = fields.Many2one(
-        comodel_name='mrp.bom',
-        string='BOM',
+
+    # === Link to Dismantling ===
+    dismantling_id = fields.Many2one(
+        comodel_name='itx.revival.dismantling',
+        string='Dismantling Order',
         readonly=True,
         copy=False,
-    )
-    unbuild_ids = fields.One2many(
-        comodel_name='mrp.unbuild',
-        inverse_name='itx_acquired_id',
-        string='Unbuild Orders',
     )
 
     # === State ===
@@ -341,73 +338,33 @@ class ItxRevivalAcquired(models.Model):
         })
 
     def action_confirm_stock(self):
-        """Confirm vehicle received in stock"""
+        """Confirm vehicle received in stock (manual)"""
         self.ensure_one()
         self.state = 'stocked'
 
-    def action_create_bom(self):
-        """Create MRP BOM from assessment lines"""
+    def action_create_dismantling(self):
+        """Create Dismantling Order"""
         self.ensure_one()
+        if self.dismantling_id:
+            raise UserError('มี Dismantling Order อยู่แล้ว')
+        if self.state != 'stocked':
+            raise UserError('ต้องอยู่สถานะ In Stock ก่อน')
 
-        if self.bom_id:
-            raise UserError('มี BOM อยู่แล้ว')
-
-        if not self.product_id:
-            raise UserError('กรุณาสร้าง Vehicle Product ก่อน')
-
-        # Get assessment lines that are found
-        found_lines = self.assessment_id.line_ids.filtered(
-            lambda l: l.is_found and l.product_id
-        )
-
-        if not found_lines:
-            raise UserError('ไม่มีอะไหล่ที่เจอในแบบประเมิน')
-
-        # Create BOM
-        bom = self.env['mrp.bom'].create({
-            'product_tmpl_id': self.product_id.product_tmpl_id.id,
-            'product_id': self.product_id.id,
-            'product_qty': 1,
-            'type': 'normal',
-            'itx_acquired_id': self.id,
+        dismantling = self.env['itx.revival.dismantling'].create({
+            'acquired_id': self.id,
         })
-
-        # Create BOM lines
-        for line in found_lines:
-            product_product = self.env['product.product'].search([
-                ('product_tmpl_id', '=', line.product_id.id)
-            ], limit=1)
-
-            if product_product:
-                self.env['mrp.bom.line'].create({
-                    'bom_id': bom.id,
-                    'product_id': product_product.id,
-                    'product_qty': 1,
-                    'itx_cost_weight': line.cost_weight,
-                    'itx_expected_price': line.expected_price,
-                })
-
-        self.bom_id = bom.id
-        self.state = 'dismantling'
-
+        self.write({
+            'dismantling_id': dismantling.id,
+            'state': 'dismantling',
+        })
         return {
             'type': 'ir.actions.act_window',
-            'name': 'BOM',
-            'res_model': 'mrp.bom',
-            'res_id': bom.id,
+            'name': 'Dismantling Order',
+            'res_model': 'itx.revival.dismantling',
+            'res_id': dismantling.id,
             'view_mode': 'form',
             'target': 'current',
         }
-
-    def action_unbuild(self):
-        """Create Unbuild Order"""
-        self.ensure_one()
-
-        if not self.bom_id:
-            raise UserError('กรุณาสร้าง BOM ก่อน')
-
-        # TODO: Create mrp.unbuild
-        raise UserError('Unbuild ยังไม่พร้อมใช้งาน')
 
     def action_complete(self):
         """Mark as completed"""

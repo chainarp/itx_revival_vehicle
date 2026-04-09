@@ -20,5 +20,14 @@
             <field name="company_id" eval="False"/>
         </record>
 
+        <!-- Dismantling Sequence -->
+        <record id="seq_revival_dismantling" model="ir.sequence">
+            <field name="name">Revival Dismantling</field>
+            <field name="code">itx.revival.dismantling</field>
+            <field name="prefix">DIS/%(year)s/</field>
+            <field name="padding">4</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
     </data>
 </odoo>

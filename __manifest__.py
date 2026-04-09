@@ -43,6 +43,7 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
         # Views
         'views/itx_revival_assessment_views.xml',
         'views/itx_revival_acquired_views.xml',
+        'views/itx_revival_dismantling_views.xml',
         'views/mrp_bom_views.xml',
         'views/menuitems.xml',
     ],

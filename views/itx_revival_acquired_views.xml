@@ -44,15 +44,12 @@
                     <button name="action_confirm_stock" type="object"
                             string="Confirm Stock" class="oe_highlight"
                             invisible="state != 'purchased'"/>
-                    <button name="action_create_bom" type="object"
-                            string="Create BOM" class="oe_highlight"
-                            invisible="state != 'stocked' or bom_id or decision != 'dismantle'"/>
-                    <button name="action_unbuild" type="object"
-                            string="Unbuild"
-                            invisible="state != 'dismantling' or not bom_id"/>
+                    <button name="action_create_dismantling" type="object"
+                            string="Create Dismantling" class="oe_highlight"
+                            invisible="state != 'stocked' or dismantling_id or decision != 'dismantle'"/>
                     <button name="action_complete" type="object"
                             string="Complete" class="oe_highlight"
-                            invisible="state not in ('stocked', 'dismantling')"/>
+                            invisible="state != 'stocked' or decision != 'sell_whole'"/>
                     <field name="state" widget="statusbar"
                            statusbar_visible="draft,purchased,stocked,dismantling,completed"/>
                 </header>
@@ -107,8 +104,9 @@
                         </group>
                         <group string="Integration">
                             <field name="analytic_account_id" readonly="1"/>
-                            <field name="product_id"/>
-                            <field name="bom_id" readonly="1"/>
+                            <field name="product_id" readonly="1"/>
+                            <field name="dismantling_id" readonly="1"
+                                   invisible="not dismantling_id"/>
                         </group>
                     </group>
                     <notebook>
