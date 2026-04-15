@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Acquired List View -->
+    <record id="itx_revival_acquired_view_list" model="ir.ui.view">
+        <field name="name">itx.revival.acquired.view.list</field>
+        <field name="model">itx.revival.acquired</field>
+        <field name="arch" type="xml">
+            <list string="Acquired Vehicles"
+                  decoration-info="state == 'draft'"
+                  decoration-warning="state in ('purchased', 'stocked')"
+                  decoration-success="state == 'completed'">
+                <field name="name"/>
+                <field name="assessment_id"/>
+                <field name="vin"/>
+                <field name="spec_id"/>
+                <field name="brand_id" optional="hide"/>
+                <field name="body_type_id"/>
+                <field name="vehicle_year" optional="show"/>
+                <field name="purchase_price"/>
+                <field name="total_cost"/>
+                <field name="expected_revenue"/>
+                <field name="actual_revenue" optional="show"/>
+                <field name="actual_roi" widget="percentage" optional="show"/>
+                <field name="decision"/>
+                <field name="state" widget="badge"
+                       decoration-info="state == 'draft'"
+                       decoration-warning="state in ('purchased', 'stocked', 'dismantling')"
+                       decoration-success="state == 'completed'"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Acquired Form View -->
+    <record id="itx_revival_acquired_view_form" model="ir.ui.view">
+        <field name="name">itx.revival.acquired.view.form</field>
+        <field name="model">itx.revival.acquired</field>
+        <field name="arch" type="xml">
+            <form string="Acquired Vehicle">
+                <header>
+                    <button name="action_create_po" type="object"
+                            string="Create PO" class="oe_highlight"
+                            invisible="state != 'draft' or purchase_order_id"/>
+                    <button name="action_confirm_stock" type="object"
+                            string="Confirm Stock" class="oe_highlight"
+                            invisible="state != 'purchased'"/>
+                    <button name="action_create_dismantling" type="object"
+                            string="Create Dismantling" class="oe_highlight"
+                            invisible="state != 'stocked' or dismantling_id or decision != 'dismantle'"/>
+                    <button name="action_complete" type="object"
+                            string="Complete" class="oe_highlight"
+                            invisible="state != 'stocked' or decision != 'sell_whole'"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,purchased,stocked,dismantling,completed"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_po" type="object"
+                                class="oe_stat_button" icon="fa-shopping-cart"
+                                invisible="not purchase_order_id">
+                            <span class="o_stat_text">Purchase Order</span>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" readonly="1"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Source">
+                            <field name="assessment_id" readonly="1"/>
+                            <field name="decision" readonly="1"/>
+                        </group>
+                        <group string="Vehicle">
+                            <field name="spec_id" readonly="1"/>
+                            <field name="body_type_id" readonly="1"/>
+                            <field name="vin"/>
+                            <field name="vehicle_year"/>
+                            <field name="vehicle_color"/>
+                            <field name="vehicle_mileage"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Purchase">
+                            <field name="vendor_id"/>
+                            <field name="purchase_order_id" readonly="1"/>
+                            <field name="purchase_price"/>
+                            <field name="purchase_date"/>
+                        </group>
+                        <group string="Costs">
+                            <field name="transport_cost"/>
+                            <field name="dismantling_cost"/>
+                            <field name="other_cost"/>
+                            <field name="total_cost" readonly="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="ROI Analysis">
+                            <field name="expected_revenue" readonly="1"/>
+                            <field name="actual_revenue" readonly="1"/>
+                            <field name="actual_profit" readonly="1"/>
+                            <field name="actual_roi" readonly="1" widget="percentage"/>
+                            <field name="sold_percentage" readonly="1" widget="percentage"/>
+                        </group>
+                        <group string="Integration">
+                            <field name="analytic_account_id" readonly="1"/>
+                            <field name="product_id" readonly="1"/>
+                            <field name="dismantling_id" readonly="1"
+                                   invisible="not dismantling_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Images" name="images">
+                            <field name="image_ids">
+                                <kanban>
+                                    <field name="image"/>
+                                    <field name="description"/>
+                                    <field name="sequence"/>
+                                    <templates>
+                                        <t t-name="card">
+                                            <field name="image" widget="image" class="o_attachment_image"/>
+                                            <span><field name="description"/></span>
+                                        </t>
+                                    </templates>
+                                </kanban>
+                            </field>
+                        </page>
+                        <page string="Notes" name="notes">
+                            <field name="note" placeholder="Additional notes..."/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <!-- Acquired Search View -->
+    <record id="itx_revival_acquired_view_search" model="ir.ui.view">
+        <field name="name">itx.revival.acquired.view.search</field>
+        <field name="model">itx.revival.acquired</field>
+        <field name="arch" type="xml">
+            <search string="Search Acquired Vehicles">
+                <field name="name"/>
+                <field name="vin"/>
+                <field name="assessment_id"/>
+                <field name="spec_id"/>
+                <field name="brand_id"/>
+                <field name="vendor_id"/>
+                <separator/>
+                <filter string="Draft" name="filter_draft"
+                        domain="[('state', '=', 'draft')]"/>
+                <filter string="In Stock" name="filter_stocked"
+                        domain="[('state', '=', 'stocked')]"/>
+                <filter string="Dismantling" name="filter_dismantling"
+                        domain="[('state', '=', 'dismantling')]"/>
+                <filter string="Completed" name="filter_completed"
+                        domain="[('state', '=', 'completed')]"/>
+                <separator/>
+                <filter string="To Dismantle" name="filter_dismantle"
+                        domain="[('decision', '=', 'dismantle')]"/>
+                <filter string="Sell Whole" name="filter_sell_whole"
+                        domain="[('decision', '=', 'sell_whole')]"/>
+                <separator/>
+                <filter string="Archived" name="filter_archived"
+                        domain="[('active', '=', False)]"/>
+                <group>
+                    <filter string="State" name="groupby_state" domain="[]" context="{'group_by': 'state'}"/>
+                    <filter string="Decision" name="groupby_decision" domain="[]" context="{'group_by': 'decision'}"/>
+                    <filter string="Brand" name="groupby_brand" domain="[]" context="{'group_by': 'brand_id'}"/>
+                    <filter string="Body Type" name="groupby_body_type" domain="[]" context="{'group_by': 'body_type_id'}"/>
+                    <filter string="Vendor" name="groupby_vendor" domain="[]" context="{'group_by': 'vendor_id'}"/>
+                    <filter string="Purchase Date" name="groupby_date" domain="[]" context="{'group_by': 'purchase_date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Acquired Action -->
+    <record id="itx_revival_acquired_action" model="ir.actions.act_window">
+        <field name="name">Acquired Vehicles</field>
+        <field name="res_model">itx.revival.acquired</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No acquired vehicles yet
+            </p>
+            <p>
+                สร้าง Acquired Vehicle จาก Assessment ที่ตัดสินใจซื้อ
+            </p>
+        </field>
+    </record>
+
+</odoo>

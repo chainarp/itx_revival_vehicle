@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!-- ============================================================ -->
+        <!-- Parking Status Pricing Percentage                             -->
+        <!-- ============================================================ -->
+        <!-- แจ้งจอดแล้ว: 15% ของทุนประกัน -->
+        <record id="param_parking_reported_pct" model="ir.config_parameter">
+            <field name="key">itx_revival_vehicle.parking_reported_pct</field>
+            <field name="value">0.15</field>
+        </record>
+
+        <!-- ไม่แจ้งจอด: 25% ของทุนประกัน -->
+        <record id="param_parking_not_reported_pct" model="ir.config_parameter">
+            <field name="key">itx_revival_vehicle.parking_not_reported_pct</field>
+            <field name="value">0.25</field>
+        </record>
+
+    </data>
+</odoo>

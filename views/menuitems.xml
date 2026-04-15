@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================ -->
+    <!-- Salvage Processing (under Vehicle Parts app) -->
+    <!-- No own main menu — uses itx_info_vehicle's   -->
+    <!-- ============================================ -->
+    <menuitem id="menu_salvage_processing"
+              name="Salvage Processing"
+              parent="itx_info_vehicle.menu_vehicle_parts_root"
+              sequence="10"/>
+
+    <menuitem id="menu_salvage_assessment"
+              name="Assessments"
+              parent="menu_salvage_processing"
+              action="itx_revival_assessment_action"
+              sequence="10"/>
+
+    <menuitem id="menu_salvage_acquired"
+              name="Acquired Vehicles"
+              parent="menu_salvage_processing"
+              action="itx_revival_acquired_action"
+              sequence="20"/>
+
+    <menuitem id="menu_salvage_dismantling"
+              name="Dismantling Orders"
+              parent="menu_salvage_processing"
+              action="itx_revival_dismantling_action"
+              sequence="30"/>
+
+</odoo>
