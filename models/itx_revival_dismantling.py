@@ -199,7 +199,17 @@ class ItxRevivalDismantling(models.Model):
         }
 
     def action_done(self):
-        """Confirm dismantling done — adjust condition & create lots"""
+        """Confirm dismantling done — unbuild via direct stock.move flow.
+
+        Bypasses mrp.unbuild.action_validate() because Odoo requires an MO link
+        when produced products are tracked; we don't have one. Instead we create
+        stock.moves manually:
+          1 consume move: WH/Stock → Production (salvage car, VIN lot)
+          N produce moves: Production → resolved_dest (per-part VIN lot)
+
+        Per-part destination is resolved via template_part → category → warehouse
+        main stock. All moves are linked to the existing unbuild_id for audit.
+        """
         self.ensure_one()
         if self.state != 'in_progress':
             raise UserError('ต้องอยู่สถานะ In Progress')
@@ -208,8 +218,79 @@ class ItxRevivalDismantling(models.Model):
         if not included_lines:
             raise UserError('ไม่มีรายการอะไหล่ที่รวมใน Dismantling')
 
+        acquired = self.acquired_id
+        salvage_product = acquired.product_id
+        if not salvage_product:
+            raise UserError('ไม่พบ Vehicle Product ใน Acquired')
+        if acquired.state != 'dismantling':
+            raise UserError('Acquired Vehicle ต้องอยู่สถานะ Dismantling')
+
+        company = self.env.company
+        warehouse = self.env['stock.warehouse'].search(
+            [('company_id', '=', company.id)], limit=1,
+        )
+        if not warehouse:
+            raise UserError('ไม่พบ Warehouse ของ company ปัจจุบัน')
+        stock_loc = warehouse.lot_stock_id
+        production_loc = salvage_product.with_company(company).property_stock_production
+        if not production_loc:
+            raise UserError('ไม่พบ Production Location ของ Vehicle Product')
+
+        # Consume lot must already exist (from acquired.action_confirm_stock)
+        StockLot = self.env['stock.lot']
+        consume_lot = StockLot.search([
+            ('name', '=', self.vin),
+            ('product_id', '=', salvage_product.id),
+            ('company_id', '=', company.id),
+        ], limit=1)
+        if not consume_lot:
+            raise UserError(
+                f'ไม่พบ Serial {self.vin} ของซากรถในสต็อก — '
+                f'กรุณา Confirm Stock ที่ Acquired Vehicle ก่อน'
+            )
+
+        StockMove = self.env['stock.move']
+        StockMoveLine = self.env['stock.move.line']
+
+        # === Consume move: salvage car WH/Stock → Production ===
+        consume_move = StockMove.create({
+            'name': f'Unbuild: {salvage_product.display_name}',
+            'product_id': salvage_product.id,
+            'product_uom_qty': 1.0,
+            'product_uom': salvage_product.uom_id.id,
+            'location_id': stock_loc.id,
+            'location_dest_id': production_loc.id,
+            'company_id': company.id,
+            'unbuild_id': self.unbuild_id.id,
+            'origin': self.name,
+        })
+        consume_move._action_confirm()
+        consume_move._action_assign()
+        # Stamp VIN lot on the consume move line
+        if consume_move.move_line_ids:
+            consume_move.move_line_ids[0].write({
+                'lot_id': consume_lot.id,
+                'quantity': 1.0,
+            })
+            (consume_move.move_line_ids - consume_move.move_line_ids[0]).unlink()
+        else:
+            StockMoveLine.create({
+                'move_id': consume_move.id,
+                'product_id': salvage_product.id,
+                'product_uom_id': salvage_product.uom_id.id,
+                'location_id': stock_loc.id,
+                'location_dest_id': production_loc.id,
+                'lot_id': consume_lot.id,
+                'quantity': 1.0,
+                'company_id': company.id,
+            })
+        consume_move.picked = True
+        consume_move._action_done()
+
+        # === Produce moves: Production → per-part destination ===
+        produce_moves = StockMove
         for line in included_lines:
-            # If actual condition differs from assessed → lookup/create new product
+            # Resolve actual product (variant may differ from assessed)
             if (line.actual_origin_id != line.assessed_origin_id or
                     line.actual_condition_id != line.assessed_condition_id):
                 actual_product = self._get_or_create_part_product(
@@ -217,23 +298,80 @@ class ItxRevivalDismantling(models.Model):
                     line.actual_origin_id,
                     line.actual_condition_id,
                 )
-                line.actual_product_id = actual_product.id if actual_product else False
+                if actual_product:
+                    line.actual_product_id = actual_product.id
 
-            # Create lot with VIN stamp
-            lot = self.env['stock.lot'].create({
-                'name': self.vin,
-                'product_id': (line.actual_product_id or line.product_id).id,
-                'company_id': self.env.company.id,
-                'itx_vin': self.vin,
-                'itx_acquired_id': self.acquired_id.id,
+            product = line.actual_product_id or line.product_id
+            if not product:
+                continue
+
+            # Resolve destination: part template → category → warehouse main stock
+            dest_loc = line.part_name_id._get_default_stock_location() or stock_loc
+
+            # Get or create VIN lot for this product
+            lot = StockLot.search([
+                ('name', '=', self.vin),
+                ('product_id', '=', product.id),
+                ('company_id', '=', company.id),
+            ], limit=1)
+            if not lot:
+                lot = StockLot.create({
+                    'name': self.vin,
+                    'product_id': product.id,
+                    'company_id': company.id,
+                    'itx_vin': self.vin,
+                    'itx_acquired_id': acquired.id,
+                })
+            elif not lot.itx_acquired_id:
+                lot.write({
+                    'itx_vin': self.vin,
+                    'itx_acquired_id': acquired.id,
+                })
+
+            qty = line.actual_qty or 1.0
+            move = StockMove.create({
+                'name': f'Unbuild: {product.display_name}',
+                'product_id': product.id,
+                'product_uom_qty': qty,
+                'product_uom': product.uom_id.id,
+                'location_id': production_loc.id,
+                'location_dest_id': dest_loc.id,
+                'company_id': company.id,
+                'unbuild_id': self.unbuild_id.id,
+                'origin': self.name,
             })
+            move._action_confirm()
+            move._action_assign()
+            if move.move_line_ids:
+                move.move_line_ids[0].write({
+                    'lot_id': lot.id,
+                    'quantity': qty,
+                })
+                (move.move_line_ids - move.move_line_ids[0]).unlink()
+            else:
+                StockMoveLine.create({
+                    'move_id': move.id,
+                    'product_id': product.id,
+                    'product_uom_id': product.uom_id.id,
+                    'location_id': production_loc.id,
+                    'location_dest_id': dest_loc.id,
+                    'lot_id': lot.id,
+                    'quantity': qty,
+                    'company_id': company.id,
+                })
+            move.picked = True
             line.lot_id = lot.id
+            produce_moves |= move
+
+        produce_moves._action_done()
+
+        # Mark the linked unbuild record as done (we bypassed its own validate)
+        if self.unbuild_id and self.unbuild_id.state != 'done':
+            self.unbuild_id.state = 'done'
 
         self.state = 'done'
-
-        # Update acquired state
-        if self.acquired_id.state == 'dismantling':
-            self.acquired_id.state = 'completed'
+        if acquired.state == 'dismantling':
+            acquired.state = 'completed'
 
     def _get_or_create_part_product(self, part_template, origin, condition):
         """Lookup or create product.product variant for spec + part + origin × condition.

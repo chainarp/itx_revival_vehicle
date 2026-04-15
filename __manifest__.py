@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'ITX Revival Vehicle',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.2.0',
     'category': 'Inventory/Inventory',
     'summary': 'Salvage Vehicle Lifecycle Management - Assessment to ROI',
     'description': """
@@ -39,6 +39,7 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
         'security/ir.model.access.csv',
         # Data
         'data/ir_sequence_data.xml',
+        'data/ir_config_parameter_data.xml',
         # Views
         'views/itx_revival_assessment_views.xml',
         'views/itx_revival_acquired_views.xml',

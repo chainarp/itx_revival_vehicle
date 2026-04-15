@@ -26,6 +26,18 @@ OVERALL_CONDITION_SELECTION = [
     ('other', 'Other (อื่นๆ)'),
 ]
 
+REGISTRATION_BOOK_STATUS_SELECTION = [
+    ('clean', 'Clean (ปกติ)'),
+    ('parking_stamped', 'Parking Stamped (ประทับแจ้งจอด)'),
+    ('lost', 'Lost (เล่มหาย)'),
+    ('unknown', 'Unknown (ไม่ทราบ)'),
+]
+
+PARKING_REPORTED_PCT_PARAM = 'itx_revival_vehicle.parking_reported_pct'
+PARKING_NOT_REPORTED_PCT_PARAM = 'itx_revival_vehicle.parking_not_reported_pct'
+DEFAULT_PARKING_REPORTED_PCT = 0.15
+DEFAULT_PARKING_NOT_REPORTED_PCT = 0.25
+
 
 class ItxRevivalAssessment(models.Model):
     _name = 'itx.revival.assessment'
@@ -83,7 +95,66 @@ class ItxRevivalAssessment(models.Model):
     vehicle_color = fields.Char(string='Vehicle Color')
     vehicle_mileage = fields.Integer(string='Mileage (km)')
     vehicle_vin = fields.Char(string='VIN', index=True)
+    plate_number = fields.Char(string='Plate Number', index=True, tracking=True)
+    plate_province = fields.Char(string='Plate Province')
     location = fields.Char(string='Location')
+
+    # === Insurance Source ===
+    insurance_partner_id = fields.Many2one(
+        comodel_name='res.partner',
+        string='Insurance Company',
+        domain="[('category_id.name', '=', 'บริษัทประกันภัย')]",
+        tracking=True,
+        help='บริษัทประกันภัยที่เสนอขายซาก',
+    )
+    ecf_claim_number = fields.Char(
+        string='ECF Claim Number',
+        index=True,
+        tracking=True,
+        help='เลขเคลมจากบริษัทประกัน (key identifier)',
+    )
+    claim_date = fields.Date(
+        string='Claim Date',
+        help='วันที่เกิดเหตุเคลม',
+    )
+    insurance_value = fields.Monetary(
+        string='Insurance Value',
+        currency_field='company_currency_id',
+        tracking=True,
+        help='ทุนประกันของรถคันนี้',
+    )
+    is_parking_reported = fields.Boolean(
+        string='Parking Reported',
+        default=False,
+        tracking=True,
+        help='เจ้าของแจ้งจอดกับกรมขนส่งแล้วหรือยัง — มีผลต่อราคาเสนอซื้อ',
+    )
+    registration_book_status = fields.Selection(
+        selection=REGISTRATION_BOOK_STATUS_SELECTION,
+        string='Registration Book Status',
+        default='unknown',
+        help='สภาพเล่มทะเบียน',
+    )
+    suggested_price = fields.Monetary(
+        string='Suggested Price',
+        compute='_compute_suggested_price',
+        store=True,
+        currency_field='company_currency_id',
+        help='ราคาเสนอซื้อ = ทุนประกัน × % ตามสถานะแจ้งจอด (อ่านจาก system parameter)',
+    )
+    company_currency_id = fields.Many2one(
+        comodel_name='res.currency',
+        string='Currency',
+        related='company_id.currency_id',
+        readonly=True,
+    )
+    company_id = fields.Many2one(
+        comodel_name='res.company',
+        string='Company',
+        default=lambda self: self.env.company,
+        required=True,
+        index=True,
+    )
 
     # === Overall Condition (Field Survey) ===
     overall_condition = fields.Selection(
@@ -181,10 +252,43 @@ class ItxRevivalAssessment(models.Model):
         copy=False,
     )
 
+    # === Images (Field Survey) ===
+    image_main = fields.Image(
+        string='Main Image',
+        max_width=1920,
+        max_height=1920,
+        help='รูปหลัก (แสดงใน kanban/list)',
+    )
+    image_ids = fields.One2many(
+        comodel_name='itx.revival.assessment.image',
+        inverse_name='assessment_id',
+        string='Images',
+        copy=True,
+    )
+    image_count = fields.Integer(
+        string='Image Count',
+        compute='_compute_image_count',
+    )
+
     # === Notes ===
     note = fields.Text(string='Notes')
 
     # === Compute ===
+    @api.depends('insurance_value', 'is_parking_reported')
+    def _compute_suggested_price(self):
+        ICP = self.env['ir.config_parameter'].sudo()
+        try:
+            reported_pct = float(ICP.get_param(PARKING_REPORTED_PCT_PARAM, DEFAULT_PARKING_REPORTED_PCT))
+        except (TypeError, ValueError):
+            reported_pct = DEFAULT_PARKING_REPORTED_PCT
+        try:
+            not_reported_pct = float(ICP.get_param(PARKING_NOT_REPORTED_PCT_PARAM, DEFAULT_PARKING_NOT_REPORTED_PCT))
+        except (TypeError, ValueError):
+            not_reported_pct = DEFAULT_PARKING_NOT_REPORTED_PCT
+        for rec in self:
+            pct = reported_pct if rec.is_parking_reported else not_reported_pct
+            rec.suggested_price = (rec.insurance_value or 0.0) * pct
+
     @api.depends('line_ids.expected_price', 'line_ids.qty_expected', 'target_price')
     def _compute_expected_values(self):
         for rec in self:
@@ -201,6 +305,11 @@ class ItxRevivalAssessment(models.Model):
     def _compute_line_count(self):
         for rec in self:
             rec.line_count = len(rec.line_ids)
+
+    @api.depends('image_ids')
+    def _compute_image_count(self):
+        for rec in self:
+            rec.image_count = len(rec.image_ids)
 
     # === CRUD ===
     @api.model_create_multi
@@ -356,7 +465,11 @@ class ItxRevivalAssessment(models.Model):
             raise UserError('ไม่พบ Part Origin หรือ Part Condition ที่เป็น default ใน master data')
 
         # Use standard vehicle part lookup (UK: spec + part_name + origin + condition)
-        return self._get_or_create_part_product(salvage_part, origin, condition)
+        variant = self._get_or_create_part_product(salvage_part, origin, condition)
+        # Salvage vehicle must be tracked by serial (1 car = 1 unique VIN)
+        if variant and variant.product_tmpl_id.tracking != 'serial':
+            variant.product_tmpl_id.tracking = 'serial'
+        return variant
 
     def _get_or_create_part_product(self, part_template, origin, condition):
         """Lookup or create product.product variant for spec + part + origin × condition.
@@ -532,6 +645,17 @@ class ItxRevivalAssessment(models.Model):
             'name': 'Assessment Lines',
             'res_model': 'itx.revival.assessment.line',
             'view_mode': 'list',
+            'domain': [('assessment_id', '=', self.id)],
+            'context': {'default_assessment_id': self.id},
+        }
+
+    def action_view_images(self):
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Assessment Images',
+            'res_model': 'itx.revival.assessment.image',
+            'view_mode': 'kanban,form',
             'domain': [('assessment_id', '=', self.id)],
             'context': {'default_assessment_id': self.id},
         }

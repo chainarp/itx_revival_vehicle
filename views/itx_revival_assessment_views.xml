@@ -12,12 +12,18 @@
                   decoration-muted="state == 'cancelled'">
                 <field name="name"/>
                 <field name="assessment_date"/>
+                <field name="ecf_claim_number" optional="show"/>
+                <field name="plate_number" optional="show"/>
+                <field name="insurance_partner_id" optional="hide"/>
                 <field name="spec_id"/>
                 <field name="brand_id" optional="hide"/>
                 <field name="model_id" optional="hide"/>
                 <field name="body_type_id"/>
                 <field name="assessor_id" optional="show"/>
-                <field name="asking_price" optional="show"/>
+                <field name="insurance_value" optional="hide"/>
+                <field name="is_parking_reported" optional="hide"/>
+                <field name="suggested_price" optional="show"/>
+                <field name="asking_price" optional="hide"/>
                 <field name="target_price"/>
                 <field name="expected_revenue"/>
                 <field name="expected_roi" widget="percentage"/>
@@ -85,7 +91,14 @@
                                 invisible="line_count == 0">
                             <field name="line_count" widget="statinfo" string="Parts"/>
                         </button>
+                        <button class="oe_stat_button" icon="fa-camera"
+                                type="object" name="action_view_images"
+                                invisible="image_count == 0">
+                            <field name="image_count" widget="statinfo" string="Images"/>
+                        </button>
                     </div>
+                    <field name="image_main" widget="image" class="oe_avatar"
+                           options="{'preview_image': 'image_main'}"/>
                     <div class="oe_title">
                         <h1>
                             <field name="name" readonly="1"/>
@@ -106,6 +119,11 @@
                             <field name="vehicle_color"/>
                             <field name="vehicle_mileage"/>
                             <field name="vehicle_vin"/>
+                            <label for="plate_number"/>
+                            <div class="o_row">
+                                <field name="plate_number" placeholder="เช่น กข-1234"/>
+                                <field name="plate_province" placeholder="จังหวัด"/>
+                            </div>
                             <field name="location"/>
                             <field name="overall_condition"/>
                             <field name="overall_condition_note"
@@ -113,15 +131,30 @@
                         </group>
                     </group>
                     <group>
+                        <group string="Insurance Source">
+                            <field name="insurance_partner_id"
+                                   options="{'no_create': True}"/>
+                            <field name="ecf_claim_number"/>
+                            <field name="claim_date"/>
+                            <field name="registration_book_status"/>
+                            <field name="company_currency_id" invisible="1"/>
+                        </group>
                         <group string="Assessment">
                             <field name="assessor_id"/>
                             <field name="assessment_date"/>
                             <field name="bom_id" readonly="1"
                                    invisible="not bom_id"/>
                         </group>
-                        <group string="Pricing">
+                    </group>
+                    <group>
+                        <group string="Pricing (ราคาเสนอซื้อซาก)">
+                            <field name="insurance_value"/>
+                            <field name="is_parking_reported"/>
+                            <field name="suggested_price" readonly="1"/>
                             <field name="asking_price"/>
                             <field name="target_price"/>
+                        </group>
+                        <group string="Expected ROI">
                             <field name="expected_revenue" readonly="1"/>
                             <field name="expected_profit" readonly="1"/>
                             <field name="expected_roi" readonly="1" widget="percentage"/>
@@ -160,6 +193,33 @@
                                 </list>
                             </field>
                         </page>
+                        <page string="Images" name="images">
+                            <field name="image_ids">
+                                <kanban>
+                                    <templates>
+                                        <t t-name="card">
+                                            <div class="o_kanban_image">
+                                                <field name="image" widget="image"/>
+                                            </div>
+                                            <div class="oe_kanban_details">
+                                                <strong><field name="caption"/></strong>
+                                                <div><field name="category"/></div>
+                                            </div>
+                                        </t>
+                                    </templates>
+                                </kanban>
+                                <form>
+                                    <sheet>
+                                        <field name="image" widget="image"/>
+                                        <group>
+                                            <field name="caption"/>
+                                            <field name="category"/>
+                                            <field name="sequence"/>
+                                        </group>
+                                    </sheet>
+                                </form>
+                            </field>
+                        </page>
                         <page string="Notes" name="notes">
                             <field name="note" placeholder="Additional notes..."/>
                         </page>
@@ -183,6 +243,9 @@
                 <field name="body_type_id"/>
                 <field name="assessor_id"/>
                 <field name="vehicle_vin"/>
+                <field name="plate_number"/>
+                <field name="ecf_claim_number"/>
+                <field name="insurance_partner_id"/>
                 <separator/>
                 <filter string="Draft" name="filter_draft"
                         domain="[('state', '=', 'draft')]"/>
@@ -198,6 +261,11 @@
                 <filter string="Not Buy" name="filter_not_buy"
                         domain="[('decision', '=', 'not_buy')]"/>
                 <separator/>
+                <filter string="Parking Reported (15%)" name="filter_parking_reported"
+                        domain="[('is_parking_reported', '=', True)]"/>
+                <filter string="Not Reported (25%)" name="filter_not_reported"
+                        domain="[('is_parking_reported', '=', False)]"/>
+                <separator/>
                 <filter string="Archived" name="filter_archived"
                         domain="[('active', '=', False)]"/>
                 <group>
@@ -206,6 +274,7 @@
                     <filter string="Brand" name="groupby_brand" domain="[]" context="{'group_by': 'brand_id'}"/>
                     <filter string="Body Type" name="groupby_body_type" domain="[]" context="{'group_by': 'body_type_id'}"/>
                     <filter string="Assessor" name="groupby_assessor" domain="[]" context="{'group_by': 'assessor_id'}"/>
+                    <filter string="Insurance Company" name="groupby_insurance" domain="[]" context="{'group_by': 'insurance_partner_id'}"/>
                     <filter string="Assessment Date" name="groupby_date" domain="[]" context="{'group_by': 'assessment_date:month'}"/>
                 </group>
             </search>

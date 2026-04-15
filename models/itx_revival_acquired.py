@@ -343,8 +343,82 @@ class ItxRevivalAcquired(models.Model):
         })
 
     def action_confirm_stock(self):
-        """Confirm vehicle received in stock (manual)"""
+        """Validate the PO incoming picking with a VIN-stamped lot/serial.
+
+        - Stamps move_line.lot with VIN (creates stock.lot if missing)
+        - Validates the picking so Odoo books the move Vendor → WH/Stock
+        - Flips state to 'stocked'
+        """
         self.ensure_one()
+        if self.state != 'purchased':
+            raise UserError('ต้องอยู่สถานะ Purchased ก่อน')
+        if not self.purchase_order_id:
+            raise UserError('ไม่มี Purchase Order ผูกไว้')
+        if not self.product_id:
+            raise UserError('ไม่พบ Vehicle Product')
+        if not self.vin:
+            raise UserError('กรุณาระบุ VIN ก่อน Confirm Stock')
+
+        picking = self.purchase_order_id.picking_ids.filtered(
+            lambda p: p.picking_type_id.code == 'incoming' and p.state not in ('done', 'cancel')
+        )[:1]
+        if not picking:
+            raise UserError('ไม่พบ Incoming Picking ที่ยังไม่ done ของ PO นี้')
+
+        vehicle_move = picking.move_ids.filtered(
+            lambda m: m.product_id.id == self.product_id.id
+        )[:1]
+        if not vehicle_move:
+            raise UserError('ไม่พบ move ของ Vehicle Product ใน Picking')
+
+        # Ensure the picking is assignable
+        if picking.state == 'draft':
+            picking.action_confirm()
+        picking.action_assign()
+
+        # Get or create the VIN lot (unique per product+company+name)
+        StockLot = self.env['stock.lot']
+        lot = StockLot.search([
+            ('name', '=', self.vin),
+            ('product_id', '=', self.product_id.id),
+            ('company_id', '=', self.env.company.id),
+        ], limit=1)
+        if not lot:
+            lot = StockLot.create({
+                'name': self.vin,
+                'product_id': self.product_id.id,
+                'company_id': self.env.company.id,
+                'itx_vin': self.vin,
+                'itx_acquired_id': self.id,
+            })
+        elif not lot.itx_acquired_id:
+            lot.write({
+                'itx_vin': self.vin,
+                'itx_acquired_id': self.id,
+            })
+
+        # Assign lot + qty on the move line(s); ensure exactly 1 line with qty=1
+        move_lines = vehicle_move.move_line_ids
+        if not move_lines:
+            self.env['stock.move.line'].create({
+                'move_id': vehicle_move.id,
+                'product_id': self.product_id.id,
+                'product_uom_id': vehicle_move.product_uom.id,
+                'location_id': vehicle_move.location_id.id,
+                'location_dest_id': vehicle_move.location_dest_id.id,
+                'lot_id': lot.id,
+                'quantity': 1.0,
+                'picking_id': picking.id,
+            })
+        else:
+            first = move_lines[0]
+            first.write({'lot_id': lot.id, 'quantity': 1.0})
+            # Drop any extra move lines
+            (move_lines - first).unlink()
+
+        vehicle_move.picked = True
+        picking.button_validate()
+
         self.state = 'stocked'
 
     def action_create_dismantling(self):

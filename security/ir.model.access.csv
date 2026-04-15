@@ -3,6 +3,8 @@ access_itx_revival_assessment_user,itx.revival.assessment.user,model_itx_revival
 access_itx_revival_assessment_manager,itx.revival.assessment.manager,model_itx_revival_assessment,stock.group_stock_manager,1,1,1,1
 access_itx_revival_assessment_line_user,itx.revival.assessment.line.user,model_itx_revival_assessment_line,stock.group_stock_user,1,0,0,0
 access_itx_revival_assessment_line_manager,itx.revival.assessment.line.manager,model_itx_revival_assessment_line,stock.group_stock_manager,1,1,1,1
+access_itx_revival_assessment_image_user,itx.revival.assessment.image.user,model_itx_revival_assessment_image,stock.group_stock_user,1,0,0,0
+access_itx_revival_assessment_image_manager,itx.revival.assessment.image.manager,model_itx_revival_assessment_image,stock.group_stock_manager,1,1,1,1
 access_itx_revival_acquired_user,itx.revival.acquired.user,model_itx_revival_acquired,stock.group_stock_user,1,0,0,0
 access_itx_revival_acquired_manager,itx.revival.acquired.manager,model_itx_revival_acquired,stock.group_stock_manager,1,1,1,1
 access_itx_revival_acquired_image_user,itx.revival.acquired.image.user,model_itx_revival_acquired_image,stock.group_stock_user,1,0,0,0
