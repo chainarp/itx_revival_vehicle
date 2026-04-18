@@ -6,10 +6,24 @@ from odoo.exceptions import UserError
 
 ACQUIRED_STATE_SELECTION = [
     ('draft', 'Draft'),
-    ('purchased', 'Purchased'),
+    ('po_created', 'PO Created'),
+    ('releasing', 'Releasing'),
+    # Path B only (dismantle):
     ('stocked', 'In Stock'),
     ('dismantling', 'Dismantling'),
+    ('parts_ready', 'Parts Ready'),
+    # Path A only (broker/sell_whole):
+    ('delivered', 'Delivered'),
+    # Common settlement:
+    ('settling', 'Settling'),
+    ('closed', 'Closed'),
+]
+
+OWNERSHIP_TRANSFER_STATUS = [
+    ('pending', 'Pending'),
+    ('in_progress', 'In Progress'),
     ('completed', 'Completed'),
+    ('not_applicable', 'N/A'),
 ]
 
 
@@ -208,6 +222,74 @@ class ItxRevivalAcquired(models.Model):
         help='% ชิ้นส่วนที่ขายแล้ว',
     )
 
+    # === Release Document (ใบปล่อยรถ) ===
+    release_request_date = fields.Date(
+        string='Release Request Date',
+        help='วันที่ขอใบปล่อยรถจากประกัน',
+    )
+    release_doc_date = fields.Date(
+        string='Release Doc Received',
+        help='วันที่ได้รับใบปล่อยรถ',
+    )
+    release_note = fields.Char(
+        string='Release Note',
+        help='หมายเหตุใบปล่อยรถ',
+    )
+
+    # === Settlement (ชำระค่าซาก) ===
+    payment_to_insurance_date = fields.Date(
+        string='Payment Date',
+        help='วันที่โอนค่าซากให้ประกัน',
+    )
+    payment_to_insurance_amount = fields.Monetary(
+        string='Payment Amount',
+        currency_field='company_currency_id',
+        help='จำนวนเงินที่โอนให้ประกัน',
+    )
+    registration_book_received_date = fields.Date(
+        string='Reg. Book Received',
+        help='วันที่ได้รับเล่มทะเบียน',
+    )
+    ownership_transfer_status = fields.Selection(
+        selection=OWNERSHIP_TRANSFER_STATUS,
+        string='Ownership Transfer',
+        default='pending',
+        tracking=True,
+    )
+    ownership_transfer_date = fields.Date(
+        string='Transfer Date',
+        help='วันที่โอนกรรมสิทธิ์สำเร็จ',
+    )
+    company_currency_id = fields.Many2one(
+        comodel_name='res.currency',
+        related='company_id.currency_id',
+        readonly=True,
+    )
+    company_id = fields.Many2one(
+        comodel_name='res.company',
+        string='Company',
+        default=lambda self: self.env.company,
+        required=True,
+    )
+
+    # === Path A: Broker/Sell Whole ===
+    sale_order_id = fields.Many2one(
+        comodel_name='sale.order',
+        string='Sale Order',
+        readonly=True,
+        copy=False,
+        help='SO ขายยกคัน (dropship)',
+    )
+    customer_id = fields.Many2one(
+        comodel_name='res.partner',
+        string='Customer',
+        help='ลูกค้าที่ซื้อยกคัน',
+    )
+    delivery_date = fields.Date(
+        string='Delivery Date',
+        help='วันที่ลูกค้ารับรถ',
+    )
+
     # === Images ===
     image_ids = fields.One2many(
         comodel_name='itx.revival.acquired.image',
@@ -294,20 +376,8 @@ class ItxRevivalAcquired(models.Model):
         self.analytic_account_id = analytic.id
 
     # === Action Methods ===
-    def action_create_po(self):
-        """Create Purchase Order for this vehicle"""
-        self.ensure_one()
 
-        if self.purchase_order_id:
-            raise UserError('มี Purchase Order อยู่แล้ว')
-
-        if not self.vendor_id:
-            raise UserError('กรุณาระบุ Vendor ก่อน')
-
-        if not self.purchase_price:
-            raise UserError('กรุณาระบุ Purchase Price ก่อน')
-
-        # Get salvage vehicle product from assessment's spec-level BOM
+    def _ensure_product(self):
         if not self.product_id:
             bom = self.env['mrp.bom'].search([
                 ('itx_spec_id', '=', self.spec_id.id),
@@ -317,13 +387,23 @@ class ItxRevivalAcquired(models.Model):
             else:
                 raise UserError('ไม่พบ Vehicle Product กรุณา Generate Lines ใน Assessment ก่อน')
 
-        # Create PO
+    # --- draft → po_created ---
+    def action_create_po(self):
+        self.ensure_one()
+        if self.purchase_order_id:
+            raise UserError('มี Purchase Order อยู่แล้ว')
+        if not self.vendor_id:
+            raise UserError('กรุณาระบุ Vendor ก่อน')
+        if not self.purchase_price:
+            raise UserError('กรุณาระบุ Purchase Price ก่อน')
+
+        self._ensure_product()
+
         po = self.env['purchase.order'].create({
             'partner_id': self.vendor_id.id,
             'date_order': self.purchase_date or fields.Date.context_today(self),
             'origin': self.name,
         })
-
         self.env['purchase.order.line'].create({
             'order_id': po.id,
             'product_id': self.product_id.id,
@@ -331,31 +411,32 @@ class ItxRevivalAcquired(models.Model):
             'product_qty': 1,
             'price_unit': self.purchase_price,
         })
-
-        # Link analytic if available
         if self.analytic_account_id:
             for line in po.order_line:
                 line.analytic_distribution = {str(self.analytic_account_id.id): 100}
 
         self.write({
             'purchase_order_id': po.id,
-            'state': 'purchased',
+            'state': 'po_created',
         })
 
-    def action_confirm_stock(self):
-        """Validate the PO incoming picking with a VIN-stamped lot/serial.
-
-        - Stamps move_line.lot with VIN (creates stock.lot if missing)
-        - Validates the picking so Odoo books the move Vendor → WH/Stock
-        - Flips state to 'stocked'
-        """
+    # --- po_created → releasing ---
+    def action_request_release(self):
         self.ensure_one()
-        if self.state != 'purchased':
-            raise UserError('ต้องอยู่สถานะ Purchased ก่อน')
+        self.write({
+            'release_request_date': fields.Date.context_today(self),
+            'state': 'releasing',
+        })
+
+    # --- releasing → stocked (Path B: รถเข้าโกดัง) ---
+    def action_confirm_stock(self):
+        """Validate PO incoming picking with VIN lot → state=stocked."""
+        self.ensure_one()
+        if self.state != 'releasing':
+            raise UserError('ต้องอยู่สถานะ Releasing ก่อน')
         if not self.purchase_order_id:
             raise UserError('ไม่มี Purchase Order ผูกไว้')
-        if not self.product_id:
-            raise UserError('ไม่พบ Vehicle Product')
+        self._ensure_product()
         if not self.vin:
             raise UserError('กรุณาระบุ VIN ก่อน Confirm Stock')
 
@@ -371,12 +452,10 @@ class ItxRevivalAcquired(models.Model):
         if not vehicle_move:
             raise UserError('ไม่พบ move ของ Vehicle Product ใน Picking')
 
-        # Ensure the picking is assignable
         if picking.state == 'draft':
             picking.action_confirm()
         picking.action_assign()
 
-        # Get or create the VIN lot (unique per product+company+name)
         StockLot = self.env['stock.lot']
         lot = StockLot.search([
             ('name', '=', self.vin),
@@ -392,12 +471,8 @@ class ItxRevivalAcquired(models.Model):
                 'itx_acquired_id': self.id,
             })
         elif not lot.itx_acquired_id:
-            lot.write({
-                'itx_vin': self.vin,
-                'itx_acquired_id': self.id,
-            })
+            lot.write({'itx_vin': self.vin, 'itx_acquired_id': self.id})
 
-        # Assign lot + qty on the move line(s); ensure exactly 1 line with qty=1
         move_lines = vehicle_move.move_line_ids
         if not move_lines:
             self.env['stock.move.line'].create({
@@ -413,16 +488,14 @@ class ItxRevivalAcquired(models.Model):
         else:
             first = move_lines[0]
             first.write({'lot_id': lot.id, 'quantity': 1.0})
-            # Drop any extra move lines
             (move_lines - first).unlink()
 
         vehicle_move.picked = True
         picking.button_validate()
-
         self.state = 'stocked'
 
+    # --- stocked → dismantling (Path B) ---
     def action_create_dismantling(self):
-        """Create Dismantling Order"""
         self.ensure_one()
         if self.dismantling_id:
             raise UserError('มี Dismantling Order อยู่แล้ว')
@@ -445,13 +518,30 @@ class ItxRevivalAcquired(models.Model):
             'target': 'current',
         }
 
-    def action_complete(self):
-        """Mark as completed"""
+    # --- releasing → delivered (Path A: ลูกค้ารับรถ dropship) ---
+    def action_delivered(self):
         self.ensure_one()
-        self.state = 'completed'
+        self.write({
+            'delivery_date': fields.Date.context_today(self),
+            'state': 'delivered',
+        })
 
+    # --- parts_ready / delivered → settling ---
+    def action_settle(self):
+        self.ensure_one()
+        if self.state not in ('parts_ready', 'delivered'):
+            raise UserError('ต้องอยู่สถานะ Parts Ready หรือ Delivered ก่อน')
+        self.state = 'settling'
+
+    # --- settling → closed ---
+    def action_close(self):
+        self.ensure_one()
+        if not self.payment_to_insurance_date:
+            raise UserError('กรุณาระบุวันที่โอนค่าซากให้ประกัน')
+        self.state = 'closed'
+
+    # === Navigation ===
     def action_view_po(self):
-        """View Purchase Order"""
         self.ensure_one()
         if not self.purchase_order_id:
             return
@@ -460,6 +550,19 @@ class ItxRevivalAcquired(models.Model):
             'name': 'Purchase Order',
             'res_model': 'purchase.order',
             'res_id': self.purchase_order_id.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
+    def action_view_so(self):
+        self.ensure_one()
+        if not self.sale_order_id:
+            return
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Sale Order',
+            'res_model': 'sale.order',
+            'res_id': self.sale_order_id.id,
             'view_mode': 'form',
             'target': 'current',
         }

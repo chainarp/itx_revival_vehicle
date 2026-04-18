@@ -5,17 +5,18 @@ from odoo.exceptions import UserError
 
 
 DECISION_SELECTION = [
-    ('not_buy', 'ไม่ซื้อ'),
-    ('sell_whole', 'ซื้อขายทั้งคัน'),
-    ('dismantle', 'ซื้อแตก Part'),
+    ('not_buy', 'ไม่ซื้อ (คืน)'),
+    ('sell_whole', 'ขายยกคัน (Broker)'),
+    ('dismantle', 'ซื้อแยกอะไหล่'),
 ]
 
 STATE_SELECTION = [
     ('draft', 'Draft'),
-    ('preparing', 'Preparing'),
-    ('complete', 'Complete'),
-    ('cancelled', 'Cancelled'),
-    ('acquired', 'Acquired'),
+    ('assessed', 'Assessed'),
+    ('offering', 'Offering'),
+    ('returned', 'Returned'),
+    ('sold', 'Sold'),
+    ('dismantle', 'To Dismantle'),
 ]
 
 OVERALL_CONDITION_SELECTION = [
@@ -216,6 +217,32 @@ class ItxRevivalAssessment(models.Model):
     decision_date = fields.Date(string='Decision Date')
     decision_by = fields.Many2one(comodel_name='res.users', string='Decision By')
 
+    # === Offering (Wait State) ===
+    offering_start_date = fields.Date(
+        string='Offering Start Date',
+        help='วันที่เริ่มเสนอขายยกคัน',
+    )
+    offering_deadline = fields.Date(
+        string='Offering Deadline',
+        tracking=True,
+        help='deadline จากประกัน (ขายไม่ได้ภายในกำหนด ต้องคืน)',
+    )
+    offering_customer_id = fields.Many2one(
+        comodel_name='res.partner',
+        string='Buyer',
+        help='ลูกค้าที่ซื้อยกคัน (กรอกเมื่อมีคนซื้อ)',
+    )
+    offering_sale_price = fields.Monetary(
+        string='Sale Price (Whole Car)',
+        currency_field='company_currency_id',
+        help='ราคาขายยกคันที่ตกลงกับลูกค้า',
+    )
+    is_offering_expired = fields.Boolean(
+        string='Offering Expired',
+        compute='_compute_is_offering_expired',
+        search='_search_is_offering_expired',
+    )
+
     # === State ===
     state = fields.Selection(
         selection=STATE_SELECTION,
@@ -300,6 +327,20 @@ class ItxRevivalAssessment(models.Model):
                 rec.expected_roi = rec.expected_profit / rec.target_price
             else:
                 rec.expected_roi = 0
+
+    @api.depends('offering_deadline')
+    def _compute_is_offering_expired(self):
+        today = fields.Date.context_today(self)
+        for rec in self:
+            rec.is_offering_expired = (
+                rec.offering_deadline and rec.offering_deadline < today
+            )
+
+    def _search_is_offering_expired(self, operator, value):
+        today = fields.Date.context_today(self)
+        if (operator == '=' and value) or (operator == '!=' and not value):
+            return [('offering_deadline', '<', today), ('offering_deadline', '!=', False)]
+        return ['|', ('offering_deadline', '>=', today), ('offering_deadline', '=', False)]
 
     @api.depends('line_ids')
     def _compute_line_count(self):
@@ -510,34 +551,67 @@ class ItxRevivalAssessment(models.Model):
         return tmpl._get_or_create_variant(origin, condition)
 
     # === State Actions ===
-    def action_start_preparing(self):
+
+    # --- draft → assessed ---
+    def action_assess(self):
         self.ensure_one()
         if not self.spec_id:
             raise UserError('กรุณาเลือก Vehicle Spec ก่อน')
         if not self.body_type_id:
             raise UserError('Vehicle Spec นี้ไม่มี Body Type กรุณาตั้งค่าใน Spec')
-        self.state = 'preparing'
-
-    def action_complete(self):
-        self.ensure_one()
         if not self.line_ids:
             raise UserError('กรุณา Generate Lines ก่อน')
-        if not self.target_price:
-            raise UserError('กรุณากรอก Target Price ก่อน')
-        self.state = 'complete'
+        self.state = 'assessed'
 
-    def action_cancel(self):
+    # --- assessed → returned (Path 1: ไม่สนใจ) ---
+    def action_return(self):
         self.ensure_one()
-        if self.state == 'complete':
-            self.write({
-                'decision': 'not_buy',
-                'decision_date': fields.Date.context_today(self),
-                'decision_by': self.env.user.id,
-                'state': 'cancelled',
-            })
-        else:
-            self.state = 'cancelled'
+        self._write_decision('not_buy', 'returned')
 
+    # --- assessed → dismantle (Path 2: ซื้อแยกอะไหล่) ---
+    def action_decide_dismantle(self):
+        self.ensure_one()
+        self._write_decision('dismantle', 'dismantle')
+
+    # --- assessed → offering (Path 3: เสนอขายยกคัน) ---
+    def action_offer(self):
+        self.ensure_one()
+        if not self.offering_deadline:
+            raise UserError('กรุณากรอก Offering Deadline ก่อน')
+        self.write({
+            'decision': 'sell_whole',
+            'decision_date': fields.Date.context_today(self),
+            'decision_by': self.env.user.id,
+            'offering_start_date': fields.Date.context_today(self),
+            'state': 'offering',
+        })
+
+    # --- offering → sold (มีคนซื้อ+จ่ายครบ) ---
+    def action_sold(self):
+        self.ensure_one()
+        if not self.offering_customer_id:
+            raise UserError('กรุณาเลือก Buyer ก่อน')
+        if not self.offering_sale_price:
+            raise UserError('กรุณากรอก Sale Price ก่อน')
+        self.state = 'sold'
+
+    # --- offering → returned (หมดเวลา / ยกเลิก) ---
+    def action_offering_return(self):
+        self.ensure_one()
+        self.write({
+            'decision': 'not_buy',
+            'state': 'returned',
+        })
+
+    # --- offering → dismantle (เปลี่ยนใจซื้อแยก) ---
+    def action_offering_dismantle(self):
+        self.ensure_one()
+        self.write({
+            'decision': 'dismantle',
+            'state': 'dismantle',
+        })
+
+    # --- returned → draft (reset) ---
     def action_reset_draft(self):
         self.ensure_one()
         self.write({
@@ -545,14 +619,17 @@ class ItxRevivalAssessment(models.Model):
             'decision': False,
             'decision_date': False,
             'decision_by': False,
+            'offering_start_date': False,
+            'offering_deadline': False,
+            'offering_customer_id': False,
+            'offering_sale_price': False,
         })
 
+    # --- sold/dismantle → create Acquired record ---
     def action_create_acquired(self):
         self.ensure_one()
-        if self.state != 'complete':
-            raise UserError('ต้องอยู่สถานะ Complete ก่อน')
-        if not self.decision or self.decision == 'not_buy':
-            raise UserError('กรุณาเลือก Decision เป็น "ซื้อขายทั้งคัน" หรือ "ซื้อแตก Part" ก่อน')
+        if self.state not in ('sold', 'dismantle'):
+            raise UserError('ต้องอยู่สถานะ Sold หรือ To Dismantle ก่อน')
         if self.acquired_id:
             raise UserError('มี Acquired Vehicle อยู่แล้ว')
 
@@ -563,12 +640,7 @@ class ItxRevivalAssessment(models.Model):
             'vehicle_color': self.vehicle_color,
             'vehicle_mileage': self.vehicle_mileage,
         })
-        self.write({
-            'acquired_id': acquired.id,
-            'decision_date': fields.Date.context_today(self),
-            'decision_by': self.env.user.id,
-            'state': 'acquired',
-        })
+        self.acquired_id = acquired.id
         return {
             'type': 'ir.actions.act_window',
             'name': 'Acquired Vehicle',
@@ -577,6 +649,14 @@ class ItxRevivalAssessment(models.Model):
             'view_mode': 'form',
             'target': 'current',
         }
+
+    def _write_decision(self, decision, state):
+        self.write({
+            'decision': decision,
+            'decision_date': fields.Date.context_today(self),
+            'decision_by': self.env.user.id,
+            'state': state,
+        })
 
     def action_open_bom(self):
         """Open spec-level BOM for editing"""

@@ -371,7 +371,7 @@ class ItxRevivalDismantling(models.Model):
 
         self.state = 'done'
         if acquired.state == 'dismantling':
-            acquired.state = 'completed'
+            acquired.state = 'parts_ready'
 
     def _get_or_create_part_product(self, part_template, origin, condition):
         """Lookup or create product.product variant for spec + part + origin × condition.
