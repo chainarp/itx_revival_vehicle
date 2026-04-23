@@ -17,5 +17,20 @@
             <field name="value">0.25</field>
         </record>
 
+        <!-- ============================================================ -->
+        <!-- Target ROI Threshold                                          -->
+        <!-- ============================================================ -->
+        <!-- ขายยกคัน: เป้ากำไร 20% -->
+        <record id="param_target_roi_whole_car" model="ir.config_parameter">
+            <field name="key">itx_revival_vehicle.target_roi_whole_car</field>
+            <field name="value">0.20</field>
+        </record>
+
+        <!-- แยกซาก: เป้ากำไร 25% -->
+        <record id="param_target_roi_dismantle" model="ir.config_parameter">
+            <field name="key">itx_revival_vehicle.target_roi_dismantle</field>
+            <field name="value">0.25</field>
+        </record>
+
     </data>
 </odoo>
