@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'ITX Revival Vehicle',
-    'version': '19.0.1.2.0',
+    'version': '19.0.2.0.0',
     'category': 'Inventory/Inventory',
     'summary': 'Salvage Vehicle Lifecycle Management - Assessment to ROI',
     'description': """
@@ -15,12 +15,12 @@ Flow:
 2. H/O สร้างแบบประเมิน → Generate list อะไหล่ + ราคาคาดการณ์
 3. พิมพ์ Checklist ให้สายสืบไปสำรวจหน้างาน
 4. H/O ตัดสินใจ: ไม่ซื้อ / ซื้อขายทั้งคัน / ซื้อแตก part
-5. ถ้าซื้อ → สร้าง PO → รับเข้าสต็อก → Unbuild → อะไหล่พร้อมขาย
+5. ถ้าซื้อ → สร้าง PO → รับเข้าสต็อก → Dismantling → อะไหล่พร้อมขาย
 
 Features:
-- Assessment: แบบประเมินซากรถ + Generate parts จาก BOM Template
+- Assessment: แบบประเมินซากรถ + Generate parts จาก Template BOM
 - Acquired: รถที่ซื้อแล้ว + Analytic Account per vehicle
-- Integration: MRP Unbuild, Purchase Order
+- Integration: Purchase Order, Stock Move
 - Reports: ROI Report per vehicle
 
 Developed by IT Expert Training & Outsourcing Co. (Thailand)
@@ -30,8 +30,9 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
     'license': 'LGPL-3',
     'depends': [
         'itx_info_vehicle',
-        'mrp',
         'purchase_stock',
+        'sale_stock',
+        'stock_dropshipping',
         'account',
     ],
     'data': [
@@ -44,7 +45,6 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
         'views/itx_revival_assessment_views.xml',
         'views/itx_revival_acquired_views.xml',
         'views/itx_revival_dismantling_views.xml',
-        'views/mrp_bom_views.xml',
         'views/menuitems.xml',
     ],
     'demo': [],

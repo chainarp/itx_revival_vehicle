@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from odoo import fields, models
+from odoo import api, fields, models
 
 
 class ItxRevivalDismantlingLine(models.Model):
@@ -92,10 +92,30 @@ class ItxRevivalDismantlingLine(models.Model):
         help='Lot ที่สร้างตอน confirm (stamp VIN)',
     )
 
+    # === Pricing ===
+    assessed_price = fields.Float(
+        string='Assessed Price',
+        digits='Product Price',
+        readonly=True,
+        help='ราคาที่ H/O ประเมินไว้ตอน Assessment',
+    )
+    sale_price = fields.Float(
+        string='Sale Price',
+        digits='Product Price',
+        help='ราคาขายจริง — กำหนดโดยคนที่รู้จัก part',
+    )
+
     # === Cost ===
     cost_weight = fields.Float(
         string='Cost Weight (%)',
         digits=(5, 2),
+    )
+    allocated_cost = fields.Float(
+        string='Allocated Cost',
+        compute='_compute_allocated_cost',
+        store=True,
+        digits='Product Price',
+        help='ต้นทุนจัดสรรจาก purchase price ตาม cost weight',
     )
 
     # === Control ===
@@ -105,3 +125,18 @@ class ItxRevivalDismantlingLine(models.Model):
         help='รวมใน Dismantling หรือไม่',
     )
     note = fields.Char(string='Note')
+
+    # === Compute ===
+    @api.depends('cost_weight', 'dismantling_id.acquired_id.purchase_price',
+                 'dismantling_id.line_ids', 'dismantling_id.line_ids.cost_weight')
+    def _compute_allocated_cost(self):
+        for rec in self:
+            purchase_price = rec.dismantling_id.acquired_id.purchase_price if rec.dismantling_id.acquired_id else 0
+            if purchase_price and rec.cost_weight:
+                total_weight = sum(rec.dismantling_id.line_ids.mapped('cost_weight'))
+                if total_weight:
+                    rec.allocated_cost = purchase_price * rec.cost_weight / total_weight
+                else:
+                    rec.allocated_cost = 0
+            else:
+                rec.allocated_cost = 0

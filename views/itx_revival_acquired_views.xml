@@ -8,8 +8,9 @@
         <field name="arch" type="xml">
             <list string="Acquired Vehicles"
                   decoration-info="state == 'draft'"
-                  decoration-warning="state in ('purchased', 'stocked')"
-                  decoration-success="state == 'completed'">
+                  decoration-warning="state in ('po_created', 'releasing', 'stocked', 'dismantling')"
+                  decoration-success="state in ('parts_ready', 'delivered', 'closed')"
+                  decoration-muted="state == 'settling'">
                 <field name="name"/>
                 <field name="assessment_id"/>
                 <field name="vin"/>
@@ -21,12 +22,12 @@
                 <field name="total_cost"/>
                 <field name="expected_revenue"/>
                 <field name="actual_revenue" optional="show"/>
-                <field name="actual_roi" widget="percentage" optional="show"/>
+                <field name="actual_roi" widget="percentage" optional="hide"/>
                 <field name="decision"/>
                 <field name="state" widget="badge"
                        decoration-info="state == 'draft'"
-                       decoration-warning="state in ('purchased', 'stocked', 'dismantling')"
-                       decoration-success="state == 'completed'"/>
+                       decoration-warning="state in ('po_created', 'releasing', 'stocked', 'dismantling')"
+                       decoration-success="state in ('parts_ready', 'delivered', 'closed')"/>
             </list>
         </field>
     </record>
@@ -38,27 +39,88 @@
         <field name="arch" type="xml">
             <form string="Acquired Vehicle">
                 <header>
+                    <!-- draft → po_created (Path B: dismantle — PO ตรง) -->
                     <button name="action_create_po" type="object"
-                            string="Create PO" class="oe_highlight"
-                            invisible="state != 'draft' or purchase_order_id"/>
+                            string="Create PO (ซื้อแยกซาก)" class="oe_highlight"
+                            invisible="state != 'draft' or decision != 'dismantle' or purchase_order_id"/>
+                    <!-- draft → po_created (Path A: sell_whole — SO + dropship) -->
+                    <button name="action_create_so_dropship" type="object"
+                            string="Create SO + Dropship (ขายยกคัน)" class="oe_highlight"
+                            invisible="state != 'draft' or decision != 'sell_whole' or sale_order_id"/>
+                    <!-- po_created → releasing -->
+                    <button name="action_request_release" type="object"
+                            string="Request Release (ขอใบปล่อย)" class="oe_highlight"
+                            invisible="state != 'po_created'"/>
+                    <!-- releasing → stocked (Path B) -->
                     <button name="action_confirm_stock" type="object"
-                            string="Confirm Stock" class="oe_highlight"
-                            invisible="state != 'purchased'"/>
+                            string="Confirm Stock (รับรถเข้าโกดัง)" class="oe_highlight"
+                            invisible="state != 'releasing' or decision != 'dismantle'"/>
+                    <!-- releasing → delivered (Path A) -->
+                    <button name="action_delivered" type="object"
+                            string="Delivered (ลูกค้ารับรถ)" class="oe_highlight"
+                            invisible="state != 'releasing' or decision != 'sell_whole'"/>
+                    <!-- stocked → dismantling -->
                     <button name="action_create_dismantling" type="object"
-                            string="Create Dismantling" class="oe_highlight"
-                            invisible="state != 'stocked' or dismantling_id or decision != 'dismantle'"/>
-                    <button name="action_complete" type="object"
-                            string="Complete" class="oe_highlight"
-                            invisible="state != 'stocked' or decision != 'sell_whole'"/>
+                            string="Start Dismantling" class="oe_highlight"
+                            invisible="state != 'stocked' or dismantling_id"/>
+                    <!-- parts_ready / delivered → settling -->
+                    <button name="action_settle" type="object"
+                            string="Settle (ชำระค่าซาก)" class="oe_highlight"
+                            invisible="state not in ('parts_ready', 'delivered')"/>
+                    <!-- create expense bill -->
+                    <button name="action_create_expense_bill" type="object"
+                            string="Create Expense Bill (ค่าใช้จ่ายเพิ่ม)"
+                            invisible="state in ('draft', 'closed') or expense_bill_id"/>
+                    <!-- settling → closed -->
+                    <button name="action_close" type="object"
+                            string="Close" class="oe_highlight"
+                            invisible="state != 'settling'"/>
+                    <!-- reset to draft -->
+                    <button name="action_reset_draft" type="object"
+                            string="Reset to Draft"
+                            invisible="state == 'draft'"
+                            confirm="Reset กลับ Draft? (ข้อมูลที่กรอกไว้จะไม่หาย)"/>
+
                     <field name="state" widget="statusbar"
-                           statusbar_visible="draft,purchased,stocked,dismantling,completed"/>
+                           statusbar_visible="draft,po_created,releasing,stocked,dismantling,parts_ready,closed"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
+                        <!-- Documents created by Acquired -->
                         <button name="action_view_po" type="object"
                                 class="oe_stat_button" icon="fa-shopping-cart"
                                 invisible="not purchase_order_id">
                             <span class="o_stat_text">Purchase Order</span>
+                        </button>
+                        <button name="action_view_receipt" type="object"
+                                class="oe_stat_button" icon="fa-truck"
+                                invisible="receipt_count == 0">
+                            <field name="receipt_count" widget="statinfo" string="Receipt"/>
+                        </button>
+                        <button name="action_view_vendor_bill" type="object"
+                                class="oe_stat_button" icon="fa-money"
+                                invisible="vendor_bill_count == 0">
+                            <field name="vendor_bill_count" widget="statinfo" string="Vendor Bill"/>
+                        </button>
+                        <button name="action_view_expense_bill" type="object"
+                                class="oe_stat_button" icon="fa-credit-card"
+                                invisible="not expense_bill_id">
+                            <span class="o_stat_text">Expense Bill</span>
+                        </button>
+                        <button name="action_view_dismantling" type="object"
+                                class="oe_stat_button" icon="fa-wrench"
+                                invisible="not dismantling_id">
+                            <span class="o_stat_text">Dismantling</span>
+                        </button>
+                        <button name="action_view_so" type="object"
+                                class="oe_stat_button" icon="fa-shopping-bag"
+                                invisible="not sale_order_id">
+                            <span class="o_stat_text">Sale Order</span>
+                        </button>
+                        <button name="action_view_customer_invoice" type="object"
+                                class="oe_stat_button" icon="fa-file-text-o"
+                                invisible="customer_invoice_count == 0">
+                            <field name="customer_invoice_count" widget="statinfo" string="Invoice"/>
                         </button>
                     </div>
                     <div class="oe_title">
@@ -66,10 +128,14 @@
                             <field name="name" readonly="1"/>
                         </h1>
                     </div>
+
+                    <!-- Row 1: Source + Vehicle -->
                     <group>
                         <group string="Source">
                             <field name="assessment_id" readonly="1"/>
                             <field name="decision" readonly="1"/>
+                            <field name="customer_id"
+                                   invisible="decision != 'sell_whole'"/>
                         </group>
                         <group string="Vehicle">
                             <field name="spec_id" readonly="1"/>
@@ -80,6 +146,8 @@
                             <field name="vehicle_mileage"/>
                         </group>
                     </group>
+
+                    <!-- Row 2: Purchase + Costs -->
                     <group>
                         <group string="Purchase">
                             <field name="vendor_id"/>
@@ -94,6 +162,34 @@
                             <field name="total_cost" readonly="1"/>
                         </group>
                     </group>
+
+                    <!-- Row 3: Release + Settlement -->
+                    <group string="Release &amp; Settlement"
+                           invisible="state == 'draft'">
+                        <group string="Release Document (ใบปล่อยรถ)">
+                            <field name="release_request_date" readonly="1"/>
+                            <field name="release_doc_date"/>
+                            <field name="release_note"/>
+                        </group>
+                        <group string="Settlement (ชำระค่าซาก)">
+                            <field name="company_currency_id" invisible="1"/>
+                            <field name="registration_book_received_date"/>
+                            <field name="ownership_transfer_status"/>
+                            <field name="ownership_transfer_date"
+                                   invisible="ownership_transfer_status not in ('in_progress', 'completed')"/>
+                        </group>
+                    </group>
+
+                    <!-- Row 4: Path A delivery (sell_whole only) -->
+                    <group string="Delivery (ขายยกคัน)"
+                           invisible="decision != 'sell_whole'">
+                        <group>
+                            <field name="sale_order_id" readonly="1"/>
+                            <field name="delivery_date"/>
+                        </group>
+                    </group>
+
+                    <!-- Row 5: ROI + Integration -->
                     <group>
                         <group string="ROI Analysis">
                             <field name="expected_revenue" readonly="1"/>
@@ -105,10 +201,10 @@
                         <group string="Integration">
                             <field name="analytic_account_id" readonly="1"/>
                             <field name="product_id" readonly="1"/>
-                            <field name="dismantling_id" readonly="1"
-                                   invisible="not dismantling_id"/>
                         </group>
                     </group>
+
+                    <!-- Notebook -->
                     <notebook>
                         <page string="Images" name="images">
                             <field name="image_ids">
@@ -150,18 +246,30 @@
                 <separator/>
                 <filter string="Draft" name="filter_draft"
                         domain="[('state', '=', 'draft')]"/>
+                <filter string="PO Created" name="filter_po"
+                        domain="[('state', '=', 'po_created')]"/>
+                <filter string="Releasing" name="filter_releasing"
+                        domain="[('state', '=', 'releasing')]"/>
                 <filter string="In Stock" name="filter_stocked"
                         domain="[('state', '=', 'stocked')]"/>
                 <filter string="Dismantling" name="filter_dismantling"
                         domain="[('state', '=', 'dismantling')]"/>
-                <filter string="Completed" name="filter_completed"
-                        domain="[('state', '=', 'completed')]"/>
+                <filter string="Parts Ready" name="filter_parts_ready"
+                        domain="[('state', '=', 'parts_ready')]"/>
+                <filter string="Delivered" name="filter_delivered"
+                        domain="[('state', '=', 'delivered')]"/>
+                <filter string="Settling" name="filter_settling"
+                        domain="[('state', '=', 'settling')]"/>
+                <filter string="Closed" name="filter_closed"
+                        domain="[('state', '=', 'closed')]"/>
                 <separator/>
                 <filter string="To Dismantle" name="filter_dismantle"
                         domain="[('decision', '=', 'dismantle')]"/>
                 <filter string="Sell Whole" name="filter_sell_whole"
                         domain="[('decision', '=', 'sell_whole')]"/>
                 <separator/>
+                <filter string="Active (ยังไม่ปิด)" name="filter_active_flow"
+                        domain="[('state', 'not in', ['closed'])]"/>
                 <filter string="Archived" name="filter_archived"
                         domain="[('active', '=', False)]"/>
                 <group>

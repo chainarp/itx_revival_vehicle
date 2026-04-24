@@ -61,14 +61,6 @@ class ItxRevivalDismantling(models.Model):
         help='ช่างที่รื้อ',
     )
 
-    # === MRP Integration ===
-    unbuild_id = fields.Many2one(
-        comodel_name='mrp.unbuild',
-        string='Unbuild Order',
-        readonly=True,
-        copy=False,
-    )
-
     # === State ===
     state = fields.Selection(
         selection=DISMANTLING_STATE_SELECTION,
@@ -136,6 +128,8 @@ class ItxRevivalDismantling(models.Model):
                 'actual_condition_id': line.part_condition_id.id,
                 'actual_qty': line.qty_found,
                 'product_id': line.product_id.id,
+                'assessed_price': line.expected_price,
+                'sale_price': line.expected_price,
                 'cost_weight': line.cost_weight,
                 'is_included': True,
             })
@@ -155,60 +149,29 @@ class ItxRevivalDismantling(models.Model):
 
     # === State Actions ===
     def action_start(self):
-        """Start dismantling — create Unbuild Order"""
+        """Start dismantling"""
         self.ensure_one()
         if not self.line_ids:
             raise UserError('กรุณา Generate Lines ก่อน')
 
-        # Find spec-level BOM
-        bom = self.env['mrp.bom'].search([
-            ('itx_spec_id', '=', self.spec_id.id),
-        ], limit=1)
-        if not bom:
-            raise UserError('ไม่พบ Spec-level BOM')
-
-        # Get salvage vehicle product
         product = self.acquired_id.product_id
         if not product:
             raise UserError('ไม่พบ Vehicle Product ใน Acquired')
 
-        # Create Unbuild Order
-        unbuild = self.env['mrp.unbuild'].create({
-            'product_id': product.id,
-            'bom_id': bom.id,
-            'product_qty': 1,
-            'itx_acquired_id': self.acquired_id.id,
-            'itx_dismantling_id': self.id,
-        })
-
         self.write({
-            'unbuild_id': unbuild.id,
             'dismantling_date': fields.Date.context_today(self),
             'state': 'in_progress',
         })
 
-        return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': 'เริ่มรื้อถอน',
-                'message': f'สร้าง Unbuild Order: {unbuild.name}',
-                'type': 'success',
-                'sticky': False,
-            }
-        }
-
     def action_done(self):
-        """Confirm dismantling done — unbuild via direct stock.move flow.
+        """Confirm dismantling done — create stock.moves directly.
 
-        Bypasses mrp.unbuild.action_validate() because Odoo requires an MO link
-        when produced products are tracked; we don't have one. Instead we create
-        stock.moves manually:
+        Creates stock.moves manually:
           1 consume move: WH/Stock → Production (salvage car, VIN lot)
           N produce moves: Production → resolved_dest (per-part VIN lot)
 
         Per-part destination is resolved via template_part → category → warehouse
-        main stock. All moves are linked to the existing unbuild_id for audit.
+        main stock. All moves are linked via origin field for traceability.
         """
         self.ensure_one()
         if self.state != 'in_progress':
@@ -254,14 +217,12 @@ class ItxRevivalDismantling(models.Model):
 
         # === Consume move: salvage car WH/Stock → Production ===
         consume_move = StockMove.create({
-            'name': f'Unbuild: {salvage_product.display_name}',
             'product_id': salvage_product.id,
             'product_uom_qty': 1.0,
             'product_uom': salvage_product.uom_id.id,
             'location_id': stock_loc.id,
             'location_dest_id': production_loc.id,
             'company_id': company.id,
-            'unbuild_id': self.unbuild_id.id,
             'origin': self.name,
         })
         consume_move._action_confirm()
@@ -330,14 +291,12 @@ class ItxRevivalDismantling(models.Model):
 
             qty = line.actual_qty or 1.0
             move = StockMove.create({
-                'name': f'Unbuild: {product.display_name}',
                 'product_id': product.id,
                 'product_uom_qty': qty,
                 'product_uom': product.uom_id.id,
                 'location_id': production_loc.id,
                 'location_dest_id': dest_loc.id,
                 'company_id': company.id,
-                'unbuild_id': self.unbuild_id.id,
                 'origin': self.name,
             })
             move._action_confirm()
@@ -365,13 +324,21 @@ class ItxRevivalDismantling(models.Model):
 
         produce_moves._action_done()
 
-        # Mark the linked unbuild record as done (we bypassed its own validate)
-        if self.unbuild_id and self.unbuild_id.state != 'done':
-            self.unbuild_id.state = 'done'
+        # === Update product pricing (Odoo standard for e-commerce) ===
+        for line in included_lines:
+            product = line.actual_product_id or line.product_id
+            if not product:
+                continue
+            # lst_price → Odoo inverse จะ set list_price + price_extra ให้ถูกต้อง
+            if line.sale_price:
+                product.lst_price = line.sale_price
+            # standard_price = allocated cost (per variant, per company)
+            if line.allocated_cost:
+                product.standard_price = line.allocated_cost
 
         self.state = 'done'
         if acquired.state == 'dismantling':
-            acquired.state = 'completed'
+            acquired.state = 'parts_ready'
 
     def _get_or_create_part_product(self, part_template, origin, condition):
         """Lookup or create product.product variant for spec + part + origin × condition.
@@ -407,15 +374,3 @@ class ItxRevivalDismantling(models.Model):
         # Create/find variant
         return tmpl._get_or_create_variant(origin, condition)
 
-    def action_view_unbuild(self):
-        self.ensure_one()
-        if not self.unbuild_id:
-            return
-        return {
-            'type': 'ir.actions.act_window',
-            'name': 'Unbuild Order',
-            'res_model': 'mrp.unbuild',
-            'res_id': self.unbuild_id.id,
-            'view_mode': 'form',
-            'target': 'current',
-        }
