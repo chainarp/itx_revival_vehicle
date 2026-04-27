@@ -67,6 +67,10 @@
                     <button name="action_settle" type="object"
                             string="Settle (ชำระค่าซาก)" class="oe_highlight"
                             invisible="state not in ('parts_ready', 'delivered')"/>
+                    <!-- create expense bill -->
+                    <button name="action_create_expense_bill" type="object"
+                            string="Create Expense Bill (ค่าใช้จ่ายเพิ่ม)"
+                            invisible="state in ('draft', 'closed') or expense_bill_id"/>
                     <!-- settling → closed -->
                     <button name="action_close" type="object"
                             string="Close" class="oe_highlight"
@@ -82,15 +86,31 @@
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
+                        <!-- Documents created by Acquired -->
                         <button name="action_view_po" type="object"
                                 class="oe_stat_button" icon="fa-shopping-cart"
                                 invisible="not purchase_order_id">
                             <span class="o_stat_text">Purchase Order</span>
                         </button>
+                        <button name="action_view_receipt" type="object"
+                                class="oe_stat_button" icon="fa-truck"
+                                invisible="receipt_count == 0">
+                            <field name="receipt_count" widget="statinfo" string="Receipt"/>
+                        </button>
                         <button name="action_view_vendor_bill" type="object"
                                 class="oe_stat_button" icon="fa-money"
                                 invisible="vendor_bill_count == 0">
                             <field name="vendor_bill_count" widget="statinfo" string="Vendor Bill"/>
+                        </button>
+                        <button name="action_view_expense_bill" type="object"
+                                class="oe_stat_button" icon="fa-credit-card"
+                                invisible="not expense_bill_id">
+                            <span class="o_stat_text">Expense Bill</span>
+                        </button>
+                        <button name="action_view_dismantling" type="object"
+                                class="oe_stat_button" icon="fa-wrench"
+                                invisible="not dismantling_id">
+                            <span class="o_stat_text">Dismantling</span>
                         </button>
                         <button name="action_view_so" type="object"
                                 class="oe_stat_button" icon="fa-shopping-bag"
@@ -181,8 +201,6 @@
                         <group string="Integration">
                             <field name="analytic_account_id" readonly="1"/>
                             <field name="product_id" readonly="1"/>
-                            <field name="dismantling_id" readonly="1"
-                                   invisible="not dismantling_id"/>
                         </group>
                     </group>
 

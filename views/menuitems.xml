@@ -11,19 +11,19 @@
               sequence="10"/>
 
     <menuitem id="menu_salvage_assessment"
-              name="Assessments"
+              name="Assessments (ASM)"
               parent="menu_salvage_processing"
               action="itx_revival_assessment_action"
               sequence="10"/>
 
     <menuitem id="menu_salvage_acquired"
-              name="Acquired Vehicles"
+              name="Acquired Vehicles (ACQ)"
               parent="menu_salvage_processing"
               action="itx_revival_acquired_action"
               sequence="20"/>
 
     <menuitem id="menu_salvage_dismantling"
-              name="Dismantling Orders"
+              name="Dismantling Orders (DIS)"
               parent="menu_salvage_processing"
               action="itx_revival_dismantling_action"
               sequence="30"/>

@@ -156,6 +156,15 @@ class ItxRevivalAcquired(models.Model):
         digits='Product Price',
     )
 
+    # === Expense Bill ===
+    expense_bill_id = fields.Many2one(
+        comodel_name='account.move',
+        string='Expense Bill',
+        readonly=True,
+        copy=False,
+        help='Vendor Bill สำหรับค่าขนส่ง/ค่ารื้อถอน/อื่นๆ',
+    )
+
     # === Analytic ===
     analytic_account_id = fields.Many2one(
         comodel_name='account.analytic.account',
@@ -190,7 +199,10 @@ class ItxRevivalAcquired(models.Model):
         index=True,
     )
 
-    # === Invoice/Bill Links ===
+    # === Document Links ===
+    receipt_count = fields.Integer(
+        compute='_compute_receipt_count',
+    )
     vendor_bill_count = fields.Integer(
         compute='_compute_invoice_counts',
     )
@@ -312,6 +324,16 @@ class ItxRevivalAcquired(models.Model):
     )
 
     # === Compute Methods ===
+    @api.depends('purchase_order_id')
+    def _compute_receipt_count(self):
+        for rec in self:
+            if rec.purchase_order_id:
+                rec.receipt_count = len(rec.purchase_order_id.picking_ids.filtered(
+                    lambda p: p.picking_type_id.code == 'incoming'
+                ))
+            else:
+                rec.receipt_count = 0
+
     @api.depends('purchase_price', 'transport_cost', 'dismantling_cost', 'other_cost')
     def _compute_invoice_counts(self):
         for rec in self:
@@ -337,23 +359,42 @@ class ItxRevivalAcquired(models.Model):
                 (rec.other_cost or 0)
             )
 
-    @api.depends('total_cost')
+    @api.depends('analytic_account_id', 'total_cost')
     def _compute_actual_values(self):
-        """Compute actual revenue from sold parts.
-        TODO: Calculate from sale.order.line linked via lot → acquired
-        Until sales exist, all values stay 0.
+        """Compute actual revenue/profit/ROI from analytic lines.
+
+        Revenue = positive amounts (credit side = sales income)
+        Cost side comes from total_cost field (purchase + transport + dismantling + other)
+        sold_percentage = parts out of stock / total found parts
         """
         for rec in self:
-            # TODO: sum sale.order.line amounts where lot.itx_acquired_id == rec
-            rec.actual_revenue = 0
-            if rec.actual_revenue:
-                rec.actual_profit = rec.actual_revenue - rec.total_cost
-                rec.actual_roi = (rec.actual_profit / rec.total_cost * 100) if rec.total_cost else 0
-            else:
-                # No sales yet — don't show misleading negative values
+            if not rec.analytic_account_id:
+                rec.actual_revenue = 0
                 rec.actual_profit = 0
                 rec.actual_roi = 0
-            rec.sold_percentage = 0
+                rec.sold_percentage = 0
+                continue
+
+            # Query analytic lines for revenue (positive = income)
+            analytic_lines = self.env['account.analytic.line'].sudo().search([
+                ('account_id', '=', rec.analytic_account_id.id),
+            ])
+            revenue = sum(l.amount for l in analytic_lines if l.amount > 0)
+
+            rec.actual_revenue = revenue
+            rec.actual_profit = revenue - rec.total_cost if revenue else 0
+            rec.actual_roi = (rec.actual_profit / rec.total_cost) if rec.total_cost else 0
+
+            # Sold % — count lots with zero/negative on-hand qty
+            total_parts = len(rec.assessment_id.line_ids.filtered('is_found')) if rec.assessment_id else 0
+            if total_parts:
+                sold_lots = self.env['stock.lot'].sudo().search_count([
+                    ('itx_acquired_id', '=', rec.id),
+                    ('product_qty', '<=', 0),
+                ])
+                rec.sold_percentage = sold_lots / total_parts
+            else:
+                rec.sold_percentage = 0
 
     # === CRUD Methods ===
     @api.model_create_multi
@@ -386,11 +427,13 @@ class ItxRevivalAcquired(models.Model):
         if not plan:
             plan = AnalyticPlan.create({'name': 'Revival Vehicle'})
 
-        display_name = self.name
+        # Format: "ACQ/2026/0001 | VIN | Spec"
+        parts = [self.name]
+        if self.vin:
+            parts.append(self.vin)
         if self.spec_id:
-            display_name += f" - {self.spec_id.full_name}"
-        if self.vehicle_year:
-            display_name += f" {self.vehicle_year}"
+            parts.append(self.spec_id.full_name)
+        display_name = ' | '.join(parts)
 
         analytic = AnalyticAccount.create({
             'name': display_name,
@@ -403,13 +446,13 @@ class ItxRevivalAcquired(models.Model):
 
     def _ensure_product(self):
         if not self.product_id:
-            bom = self.env['mrp.bom'].search([
-                ('itx_spec_id', '=', self.spec_id.id),
-            ], limit=1)
-            if bom and bom.product_id:
-                self.product_id = bom.product_id.id
-            else:
-                raise UserError('ไม่พบ Vehicle Product กรุณา Generate Lines ใน Assessment ก่อน')
+            # Find salvage vehicle product from assessment
+            if self.assessment_id:
+                salvage = self.assessment_id._get_or_create_salvage_product()
+                if salvage:
+                    self.product_id = salvage.id
+                    return
+            raise UserError('ไม่พบ Vehicle Product กรุณา Generate Lines ใน Assessment ก่อน')
 
     def _get_or_create_vin_lot(self):
         StockLot = self.env['stock.lot']
@@ -612,6 +655,15 @@ class ItxRevivalAcquired(models.Model):
     # --- po_created → releasing ---
     def action_request_release(self):
         self.ensure_one()
+        # ทั้ง Path A + B: ต้องมี PO และ PO ต้อง confirmed แล้ว
+        if not self.purchase_order_id:
+            raise UserError('ยังไม่มี Purchase Order — กรุณาสร้าง PO ก่อนขอใบปล่อย')
+        if self.purchase_order_id.state not in ('purchase', 'done'):
+            raise UserError(
+                f'PO {self.purchase_order_id.name} ยังไม่ได้ Confirm\n'
+                f'สถานะปัจจุบัน: {self.purchase_order_id.state}\n'
+                f'กรุณา Confirm PO ก่อนขอใบปล่อย'
+            )
         # Path A (sell_whole): ลูกค้าต้องจ่ายครบก่อนขอปล่อยรถ
         if self.decision == 'sell_whole':
             unpaid = self._get_unpaid_customer_invoices()
@@ -621,6 +673,15 @@ class ItxRevivalAcquired(models.Model):
                     f'ลูกค้ายังจ่ายเงินไม่ครบ ไม่สามารถขอใบปล่อยได้\n'
                     f'Invoice ค้างจ่าย: {names}'
                 )
+        # Prefill VIN lot on receipt (user กด Validate เอง)
+        if self.vin and self.purchase_order_id:
+            receipts = self.purchase_order_id.picking_ids.filtered(
+                lambda p: p.picking_type_id.code == 'incoming'
+                          and p.state not in ('done', 'cancel')
+            )
+            for picking in receipts:
+                self._prefill_picking_vin_lot(picking)
+
         self.write({
             'release_request_date': fields.Date.context_today(self),
             'state': 'releasing',
@@ -628,20 +689,39 @@ class ItxRevivalAcquired(models.Model):
 
     # --- releasing → stocked (Path B: รถเข้าโกดัง) ---
     def action_confirm_stock(self):
-        """Validate PO incoming picking with VIN lot → state=stocked."""
+        """Check receipt is validated (done) → state=stocked."""
         self.ensure_one()
         if self.state != 'releasing':
             raise UserError('ต้องอยู่สถานะ Releasing ก่อน')
         if not self.purchase_order_id:
             raise UserError('ไม่มี Purchase Order ผูกไว้')
 
-        picking = self.purchase_order_id.picking_ids.filtered(
-            lambda p: p.picking_type_id.code == 'incoming' and p.state not in ('done', 'cancel')
-        )[:1]
-        if not picking:
-            raise UserError('ไม่พบ Incoming Picking ที่ยังไม่ done ของ PO นี้')
+        # ตรวจว่ามี incoming picking (receipt) หรือยัง
+        all_incoming = self.purchase_order_id.picking_ids.filtered(
+            lambda p: p.picking_type_id.code == 'incoming'
+        )
+        if not all_incoming:
+            raise UserError(
+                f'PO {self.purchase_order_id.name} ยังไม่มี Receipt\n'
+                f'กรุณาไปที่ PO แล้ว Confirm เพื่อให้ระบบสร้าง Receipt อัตโนมัติ'
+            )
 
-        self._prefill_picking_vin_lot(picking)
+        # ตรวจว่า receipt validate สำเร็จแล้วหรือยัง
+        done_pickings = all_incoming.filtered(lambda p: p.state == 'done')
+        pending_pickings = all_incoming.filtered(lambda p: p.state not in ('done', 'cancel'))
+
+        if not done_pickings:
+            if not pending_pickings:
+                raise UserError('Receipt ถูกยกเลิกทั้งหมด — กรุณาตรวจสอบ PO')
+            picking = pending_pickings[0]
+            raise UserError(
+                f'Receipt {picking.name} ยังไม่ได้ Validate\n'
+                f'สถานะปัจจุบัน: {picking.state}\n\n'
+                f'กรุณาไปที่ Receipt {picking.name} แล้วกด Validate ก่อน\n'
+                f'(เข้าจากปุ่ม Receipt บนหน้านี้ หรือจากเมนู Inventory > Receipts)'
+            )
+
+        # Receipt done → เปลี่ยนสถานะเป็น stocked
         self.state = 'stocked'
 
     # --- stocked → dismantling (Path B) ---
@@ -770,6 +850,68 @@ class ItxRevivalAcquired(models.Model):
             'domain': [('id', 'in', bills.ids)],
         }
 
+    def action_create_expense_bill(self):
+        """สร้าง Vendor Bill สำหรับค่าใช้จ่ายเพิ่มเติม (transport/dismantling/other) + stamp analytic"""
+        self.ensure_one()
+        if self.expense_bill_id:
+            raise UserError('มี Expense Bill อยู่แล้ว')
+
+        lines = []
+        if self.transport_cost:
+            lines.append((0, 0, {
+                'name': f'{self.name} - ค่าขนส่ง',
+                'quantity': 1,
+                'price_unit': self.transport_cost,
+                'analytic_distribution': {str(self.analytic_account_id.id): 100} if self.analytic_account_id else {},
+            }))
+        if self.dismantling_cost:
+            lines.append((0, 0, {
+                'name': f'{self.name} - ค่ารื้อถอน',
+                'quantity': 1,
+                'price_unit': self.dismantling_cost,
+                'analytic_distribution': {str(self.analytic_account_id.id): 100} if self.analytic_account_id else {},
+            }))
+        if self.other_cost:
+            lines.append((0, 0, {
+                'name': f'{self.name} - ค่าใช้จ่ายอื่น',
+                'quantity': 1,
+                'price_unit': self.other_cost,
+                'analytic_distribution': {str(self.analytic_account_id.id): 100} if self.analytic_account_id else {},
+            }))
+
+        if not lines:
+            raise UserError('ไม่มีค่าใช้จ่ายเพิ่มเติม (transport/dismantling/other ยังเป็น 0)')
+
+        bill = self.env['account.move'].create({
+            'move_type': 'in_invoice',
+            'partner_id': self.vendor_id.id or False,
+            'invoice_origin': self.name,
+            'invoice_line_ids': lines,
+        })
+        self.expense_bill_id = bill.id
+
+        return {
+            'type': 'ir.actions.act_window',
+            'name': f'Expense Bill: {self.name}',
+            'res_model': 'account.move',
+            'res_id': bill.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
+    def action_view_expense_bill(self):
+        self.ensure_one()
+        if not self.expense_bill_id:
+            return
+        return {
+            'type': 'ir.actions.act_window',
+            'name': f'Expense Bill: {self.name}',
+            'res_model': 'account.move',
+            'res_id': self.expense_bill_id.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
     def action_view_customer_invoice(self):
         self.ensure_one()
         invoices = self.sale_order_id.invoice_ids.filtered(
@@ -790,4 +932,41 @@ class ItxRevivalAcquired(models.Model):
             'res_model': 'account.move',
             'view_mode': 'list,form',
             'domain': [('id', 'in', invoices.ids)],
+        }
+
+    def action_view_dismantling(self):
+        self.ensure_one()
+        if not self.dismantling_id:
+            return
+        return {
+            'type': 'ir.actions.act_window',
+            'name': f'Dismantling: {self.dismantling_id.name}',
+            'res_model': 'itx.revival.dismantling',
+            'res_id': self.dismantling_id.id,
+            'view_mode': 'form',
+            'target': 'current',
+        }
+
+    def action_view_receipt(self):
+        self.ensure_one()
+        if not self.purchase_order_id:
+            return
+        pickings = self.purchase_order_id.picking_ids.filtered(
+            lambda p: p.picking_type_id.code == 'incoming'
+        )
+        if len(pickings) == 1:
+            return {
+                'type': 'ir.actions.act_window',
+                'name': f'Receipt: {pickings.name}',
+                'res_model': 'stock.picking',
+                'res_id': pickings.id,
+                'view_mode': 'form',
+                'target': 'current',
+            }
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Receipts',
+            'res_model': 'stock.picking',
+            'view_mode': 'list,form',
+            'domain': [('id', 'in', pickings.ids)],
         }

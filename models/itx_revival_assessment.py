@@ -366,14 +366,6 @@ class ItxRevivalAssessment(models.Model):
     )
     line_count = fields.Integer(compute='_compute_line_count')
 
-    # === BOM Link ===
-    bom_id = fields.Many2one(
-        comodel_name='mrp.bom',
-        string='Spec BOM',
-        readonly=True,
-        copy=False,
-        help='Spec-level BOM (master data)',
-    )
 
     # === Link to Acquired ===
     acquired_id = fields.Many2one(
@@ -579,7 +571,7 @@ class ItxRevivalAssessment(models.Model):
 
     # === Generate Lines ===
     def action_generate_lines(self):
-        """Generate assessment lines from spec-level BOM (create if not exists)"""
+        """Generate assessment lines from Template BOM (body_type level)"""
         self.ensure_one()
 
         if not self.spec_id or not self.body_type_id:
@@ -587,57 +579,7 @@ class ItxRevivalAssessment(models.Model):
 
         self.line_ids.unlink()
 
-        # 1. Find or create spec-level BOM
-        bom = self._get_or_create_spec_bom()
-        self.bom_id = bom.id
-
-        # 2. Copy BOM lines → assessment lines
-        lines_data = []
-        total_lines = len(bom.bom_line_ids)
-        default_weight = 100.0 / total_lines if total_lines else 0
-
-        for seq, bom_line in enumerate(bom.bom_line_ids, start=1):
-            origin, condition = self._get_origin_condition_from_variant(bom_line.product_id)
-            lines_data.append({
-                'assessment_id': self.id,
-                'sequence': seq * 10,
-                'part_name_id': bom_line.product_id.itx_part_name_id.id,
-                'product_id': bom_line.product_id.id,
-                'part_origin_id': origin.id if origin else False,
-                'part_condition_id': condition.id if condition else False,
-                'qty_expected': int(bom_line.product_qty) or 1,
-                'qty_found': int(bom_line.product_qty) or 1,
-                'expected_price': 0.0,
-                'cost_weight': bom_line.itx_cost_weight or default_weight,
-                'is_found': True,
-            })
-
-        self.env['itx.revival.assessment.line'].create(lines_data)
-
-        return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': 'สร้างรายการอะไหล่แล้ว',
-                'message': f'สร้าง {len(lines_data)} รายการจาก BOM ({bom.display_name})',
-                'type': 'success',
-                'sticky': False,
-            }
-        }
-
-    def _get_or_create_spec_bom(self):
-        """Find existing spec-level BOM or create from template.bom"""
-        self.ensure_one()
-        MrpBom = self.env['mrp.bom']
-
-        # Search existing
-        bom = MrpBom.search([
-            ('itx_spec_id', '=', self.spec_id.id),
-        ], limit=1)
-        if bom:
-            return bom
-
-        # Create from template
+        # 1. Read Template BOM for this body type
         templates = self.env['itx.info.vehicle.template.bom'].search([
             ('body_type_id', '=', self.body_type_id.id),
             ('active', '=', True),
@@ -648,7 +590,10 @@ class ItxRevivalAssessment(models.Model):
                 f'ไม่พบ BOM Template สำหรับ Body Type: {self.body_type_id.name}'
             )
 
-        # Fallback origin/condition — use is_default from master data
+        # 2. Ensure salvage vehicle product exists
+        self._get_or_create_salvage_product()
+
+        # 3. Fallback origin/condition
         PartOrigin = self.env['itx.info.vehicle.part.origin']
         PartCondition = self.env['itx.info.vehicle.part.condition']
         fallback_origin = PartOrigin.search([('is_default', '=', True)], limit=1) \
@@ -656,35 +601,42 @@ class ItxRevivalAssessment(models.Model):
         fallback_condition = PartCondition.search([('is_default', '=', True)], limit=1) \
             or PartCondition.search([('code', '=', 'GOOD')], limit=1)
 
-        # Create salvage vehicle product (spec level)
-        salvage_product = self._get_or_create_salvage_product()
-
-        # Create BOM
-        bom = MrpBom.create({
-            'product_tmpl_id': salvage_product.product_tmpl_id.id,
-            'product_id': salvage_product.id,
-            'product_qty': 1,
-            'type': 'normal',
-            'itx_spec_id': self.spec_id.id,
-        })
-
-        # Create BOM lines
+        # 4. Create assessment lines from templates
         total_parts = len(templates)
         default_weight = 100.0 / total_parts if total_parts else 0
 
-        for tmpl in templates:
+        lines_data = []
+        for seq, tmpl in enumerate(templates, start=1):
             origin = tmpl.default_part_origin_id or fallback_origin
             condition = tmpl.default_part_condition_id or fallback_condition
             product = self._get_or_create_part_product(tmpl.part_template_id, origin, condition)
-            if product:
-                self.env['mrp.bom.line'].create({
-                    'bom_id': bom.id,
-                    'product_id': product.id,
-                    'product_qty': tmpl.qty or 1,
-                    'itx_cost_weight': tmpl.cost_weight or default_weight,
-                })
 
-        return bom
+            lines_data.append({
+                'assessment_id': self.id,
+                'sequence': seq * 10,
+                'part_name_id': tmpl.part_template_id.id,
+                'product_id': product.id if product else False,
+                'part_origin_id': origin.id if origin else False,
+                'part_condition_id': condition.id if condition else False,
+                'qty_expected': tmpl.qty or 1,
+                'qty_found': tmpl.qty or 1,
+                'expected_price': 0.0,
+                'cost_weight': tmpl.cost_weight or default_weight,
+                'is_found': True,
+            })
+
+        self.env['itx.revival.assessment.line'].create(lines_data)
+
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'สร้างรายการอะไหล่แล้ว',
+                'message': f'สร้าง {len(lines_data)} รายการจาก Template BOM ({self.body_type_id.name})',
+                'type': 'success',
+                'sticky': False,
+            }
+        }
 
     def _get_or_create_salvage_product(self):
         """Get or create salvage vehicle product as vehicle part (UK applies)"""
@@ -950,61 +902,6 @@ class ItxRevivalAssessment(models.Model):
             'decision_by': self.env.user.id,
             'state': state,
         })
-
-    def action_open_bom(self):
-        """Open spec-level BOM for editing"""
-        self.ensure_one()
-        if not self.bom_id:
-            raise UserError('กรุณา Generate Lines ก่อน')
-        return {
-            'type': 'ir.actions.act_window',
-            'name': f'BOM - {self.spec_id.full_name}',
-            'res_model': 'mrp.bom',
-            'res_id': self.bom_id.id,
-            'view_mode': 'form',
-            'target': 'current',
-        }
-
-    def action_sync_from_bom(self):
-        """Re-sync assessment lines from BOM (master)"""
-        self.ensure_one()
-        if not self.bom_id:
-            raise UserError('กรุณา Generate Lines ก่อน')
-
-        self.line_ids.unlink()
-
-        lines_data = []
-        total_lines = len(self.bom_id.bom_line_ids)
-        default_weight = 100.0 / total_lines if total_lines else 0
-
-        for seq, bom_line in enumerate(self.bom_id.bom_line_ids, start=1):
-            origin, condition = self._get_origin_condition_from_variant(bom_line.product_id)
-            lines_data.append({
-                'assessment_id': self.id,
-                'sequence': seq * 10,
-                'part_name_id': bom_line.product_id.itx_part_name_id.id,
-                'product_id': bom_line.product_id.id,
-                'part_origin_id': origin.id if origin else False,
-                'part_condition_id': condition.id if condition else False,
-                'qty_expected': int(bom_line.product_qty) or 1,
-                'qty_found': int(bom_line.product_qty) or 1,
-                'expected_price': 0.0,
-                'cost_weight': bom_line.itx_cost_weight or default_weight,
-                'is_found': True,
-            })
-
-        self.env['itx.revival.assessment.line'].create(lines_data)
-
-        return {
-            'type': 'ir.actions.client',
-            'tag': 'display_notification',
-            'params': {
-                'title': 'Sync สำเร็จ',
-                'message': f'อัพเดท {len(lines_data)} รายการจาก BOM',
-                'type': 'success',
-                'sticky': False,
-            }
-        }
 
     def action_print_checklist(self):
         self.ensure_one()

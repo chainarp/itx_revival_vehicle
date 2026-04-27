@@ -56,13 +56,6 @@
                     <button name="action_generate_lines" type="object"
                             string="Generate Lines" class="oe_highlight"
                             invisible="state != 'draft' or line_count > 0"/>
-                    <button name="action_open_bom" type="object"
-                            string="Edit BOM"
-                            invisible="state != 'draft' or not bom_id"/>
-                    <button name="action_sync_from_bom" type="object"
-                            string="Sync from BOM"
-                            invisible="state != 'draft' or not bom_id"
-                            confirm="ข้อมูล field survey จะถูกล้าง ยืนยัน?"/>
                     <button name="action_print_checklist" type="object"
                             string="Print Checklist"
                             invisible="state != 'draft' or line_count == 0"/>
@@ -179,8 +172,6 @@
                         <group string="Assessment">
                             <field name="assessor_id"/>
                             <field name="assessment_date"/>
-                            <field name="bom_id" readonly="1"
-                                   invisible="not bom_id"/>
                         </group>
                     </group>
 
