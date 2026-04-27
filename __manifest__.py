@@ -32,6 +32,8 @@ Developed by IT Expert Training & Outsourcing Co. (Thailand)
         'itx_info_vehicle',
         'mrp',
         'purchase_stock',
+        'sale_stock',
+        'stock_dropshipping',
         'account',
     ],
     'data': [

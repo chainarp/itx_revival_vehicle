@@ -39,10 +39,14 @@
         <field name="arch" type="xml">
             <form string="Acquired Vehicle">
                 <header>
-                    <!-- draft → po_created -->
+                    <!-- draft → po_created (Path B: dismantle — PO ตรง) -->
                     <button name="action_create_po" type="object"
-                            string="Create PO" class="oe_highlight"
-                            invisible="state != 'draft' or purchase_order_id"/>
+                            string="Create PO (ซื้อแยกซาก)" class="oe_highlight"
+                            invisible="state != 'draft' or decision != 'dismantle' or purchase_order_id"/>
+                    <!-- draft → po_created (Path A: sell_whole — SO + dropship) -->
+                    <button name="action_create_so_dropship" type="object"
+                            string="Create SO + Dropship (ขายยกคัน)" class="oe_highlight"
+                            invisible="state != 'draft' or decision != 'sell_whole' or sale_order_id"/>
                     <!-- po_created → releasing -->
                     <button name="action_request_release" type="object"
                             string="Request Release (ขอใบปล่อย)" class="oe_highlight"
@@ -67,6 +71,11 @@
                     <button name="action_close" type="object"
                             string="Close" class="oe_highlight"
                             invisible="state != 'settling'"/>
+                    <!-- reset to draft -->
+                    <button name="action_reset_draft" type="object"
+                            string="Reset to Draft"
+                            invisible="state == 'draft'"
+                            confirm="Reset กลับ Draft? (ข้อมูลที่กรอกไว้จะไม่หาย)"/>
 
                     <field name="state" widget="statusbar"
                            statusbar_visible="draft,po_created,releasing,stocked,dismantling,parts_ready,closed"/>
@@ -78,10 +87,20 @@
                                 invisible="not purchase_order_id">
                             <span class="o_stat_text">Purchase Order</span>
                         </button>
+                        <button name="action_view_vendor_bill" type="object"
+                                class="oe_stat_button" icon="fa-money"
+                                invisible="vendor_bill_count == 0">
+                            <field name="vendor_bill_count" widget="statinfo" string="Vendor Bill"/>
+                        </button>
                         <button name="action_view_so" type="object"
                                 class="oe_stat_button" icon="fa-shopping-bag"
                                 invisible="not sale_order_id">
                             <span class="o_stat_text">Sale Order</span>
+                        </button>
+                        <button name="action_view_customer_invoice" type="object"
+                                class="oe_stat_button" icon="fa-file-text-o"
+                                invisible="customer_invoice_count == 0">
+                            <field name="customer_invoice_count" widget="statinfo" string="Invoice"/>
                         </button>
                     </div>
                     <div class="oe_title">
@@ -134,8 +153,6 @@
                         </group>
                         <group string="Settlement (ชำระค่าซาก)">
                             <field name="company_currency_id" invisible="1"/>
-                            <field name="payment_to_insurance_date"/>
-                            <field name="payment_to_insurance_amount"/>
                             <field name="registration_book_received_date"/>
                             <field name="ownership_transfer_status"/>
                             <field name="ownership_transfer_date"

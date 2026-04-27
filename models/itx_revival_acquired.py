@@ -190,10 +190,19 @@ class ItxRevivalAcquired(models.Model):
         index=True,
     )
 
+    # === Invoice/Bill Links ===
+    vendor_bill_count = fields.Integer(
+        compute='_compute_invoice_counts',
+    )
+    customer_invoice_count = fields.Integer(
+        compute='_compute_invoice_counts',
+    )
+
     # === ROI Computed ===
-    expected_revenue = fields.Float(
+    expected_revenue = fields.Monetary(
         related='assessment_id.expected_revenue',
         string='Expected Revenue',
+        currency_field='company_currency_id',
     )
     actual_revenue = fields.Float(
         string='Actual Revenue',
@@ -304,6 +313,21 @@ class ItxRevivalAcquired(models.Model):
 
     # === Compute Methods ===
     @api.depends('purchase_price', 'transport_cost', 'dismantling_cost', 'other_cost')
+    def _compute_invoice_counts(self):
+        for rec in self:
+            if rec.purchase_order_id:
+                rec.vendor_bill_count = len(rec.purchase_order_id.invoice_ids.filtered(
+                    lambda m: m.move_type == 'in_invoice'
+                ))
+            else:
+                rec.vendor_bill_count = 0
+            if rec.sale_order_id:
+                rec.customer_invoice_count = len(rec.sale_order_id.invoice_ids.filtered(
+                    lambda m: m.move_type == 'out_invoice'
+                ))
+            else:
+                rec.customer_invoice_count = 0
+
     def _compute_total_cost(self):
         for rec in self:
             rec.total_cost = (
@@ -387,7 +411,63 @@ class ItxRevivalAcquired(models.Model):
             else:
                 raise UserError('ไม่พบ Vehicle Product กรุณา Generate Lines ใน Assessment ก่อน')
 
-    # --- draft → po_created ---
+    def _get_or_create_vin_lot(self):
+        StockLot = self.env['stock.lot']
+        lot = StockLot.search([
+            ('name', '=', self.vin),
+            ('product_id', '=', self.product_id.id),
+            ('company_id', '=', self.env.company.id),
+        ], limit=1)
+        if not lot:
+            lot = StockLot.create({
+                'name': self.vin,
+                'product_id': self.product_id.id,
+                'company_id': self.env.company.id,
+                'itx_vin': self.vin,
+                'itx_acquired_id': self.id,
+            })
+        elif not lot.itx_acquired_id:
+            lot.write({'itx_vin': self.vin, 'itx_acquired_id': self.id})
+        return lot
+
+    def _prefill_picking_vin_lot(self, picking):
+        """Pre-fill lot/serial (VIN) on picking move lines — ไม่ validate ให้ user กดเอง."""
+        if not picking or picking.state in ('done', 'cancel'):
+            return
+        self._ensure_product()
+        if not self.vin:
+            return
+
+        vehicle_move = picking.move_ids.filtered(
+            lambda m: m.product_id.id == self.product_id.id
+        )[:1]
+        if not vehicle_move:
+            return
+
+        if picking.state == 'draft':
+            picking.action_confirm()
+        picking.action_assign()
+
+        lot = self._get_or_create_vin_lot()
+
+        move_lines = vehicle_move.move_line_ids
+        if not move_lines:
+            self.env['stock.move.line'].create({
+                'move_id': vehicle_move.id,
+                'product_id': self.product_id.id,
+                'product_uom_id': vehicle_move.product_uom.id,
+                'location_id': vehicle_move.location_id.id,
+                'location_dest_id': vehicle_move.location_dest_id.id,
+                'lot_id': lot.id,
+                'quantity': 1.0,
+                'picking_id': picking.id,
+            })
+        else:
+            first = move_lines[0]
+            first.write({'lot_id': lot.id, 'quantity': 1.0})
+            (move_lines - first).unlink()
+
+    # --- draft → po_created (Path B: dismantle — PO ตรง) ---
     def action_create_po(self):
         self.ensure_one()
         if self.purchase_order_id:
@@ -420,9 +500,127 @@ class ItxRevivalAcquired(models.Model):
             'state': 'po_created',
         })
 
+    # --- draft → po_created (Path A: sell_whole — SO + dropship auto PO) ---
+    def action_create_so_dropship(self):
+        self.ensure_one()
+        if self.sale_order_id:
+            raise UserError('มี Sale Order อยู่แล้ว')
+        if not self.customer_id:
+            raise UserError('กรุณาระบุ Customer ก่อน')
+        if not self.vendor_id:
+            raise UserError('กรุณาระบุ Vendor (ประกัน) ก่อน')
+        if not self.purchase_price:
+            raise UserError('กรุณาระบุ Purchase Price ก่อน')
+
+        self._ensure_product()
+        product = self.product_id
+
+        # Ensure dropship route on product
+        dropship_route = self.env.ref(
+            'stock_dropshipping.route_drop_shipping', raise_if_not_found=False,
+        )
+        if dropship_route and dropship_route not in product.route_ids:
+            product.route_ids = [(4, dropship_route.id)]
+
+        # Ensure vendor (supplierinfo) with correct price
+        supplierinfo = self.env['product.supplierinfo'].search([
+            ('product_tmpl_id', '=', product.product_tmpl_id.id),
+            ('partner_id', '=', self.vendor_id.id),
+        ], limit=1)
+        if supplierinfo:
+            supplierinfo.price = self.purchase_price
+        else:
+            self.env['product.supplierinfo'].create({
+                'product_tmpl_id': product.product_tmpl_id.id,
+                'partner_id': self.vendor_id.id,
+                'price': self.purchase_price,
+                'min_qty': 1,
+            })
+
+        # Determine sale price (agreed > offering > purchase)
+        sale_price = (
+            self.assessment_id.agreed_sale_price
+            or self.assessment_id.offering_sale_price
+            or self.purchase_price
+        )
+
+        # Create SO
+        so = self.env['sale.order'].create({
+            'partner_id': self.customer_id.id,
+            'origin': self.name,
+        })
+        self.env['sale.order.line'].create({
+            'order_id': so.id,
+            'product_id': product.id,
+            'name': f'{product.display_name} - VIN: {self.vin}',
+            'product_uom_qty': 1,
+            'price_unit': sale_price,
+        })
+        if self.analytic_account_id:
+            for line in so.order_line:
+                line.analytic_distribution = {str(self.analytic_account_id.id): 100}
+
+        # Confirm SO → triggers dropship procurement → auto PO
+        so.action_confirm()
+
+        # Retrieve auto-created PO from dropship
+        po = self.env['purchase.order'].search([
+            ('origin', 'ilike', so.name),
+            ('partner_id', '=', self.vendor_id.id),
+        ], limit=1, order='id desc')
+
+        # Confirm PO
+        if po and po.state in ('draft', 'sent'):
+            po.button_confirm()
+
+        # Pre-fill VIN lot on dropship picking (user validates manually)
+        dropship_picking = (so.picking_ids | (po.picking_ids if po else self.env['stock.picking'])).filtered(
+            lambda p: p.state not in ('done', 'cancel')
+        )[:1]
+        if dropship_picking:
+            self._prefill_picking_vin_lot(dropship_picking)
+
+        # Create Vendor Bill (draft — ไม่ post ให้ user ตรวจก่อน)
+        if po and po.state == 'purchase' and po.invoice_status == 'to invoice':
+            po.action_create_invoice()
+
+        # Create Customer Invoice (draft — ไม่ post ให้ user ตรวจก่อน)
+        if so.state == 'sale':
+            so._create_invoices()
+
+        self.write({
+            'sale_order_id': so.id,
+            'purchase_order_id': po.id if po else False,
+            'state': 'po_created',
+        })
+
+    # --- helpers: check payment status ---
+    def _get_unpaid_vendor_bills(self):
+        if not self.purchase_order_id:
+            return self.env['account.move']
+        return self.purchase_order_id.invoice_ids.filtered(
+            lambda m: m.move_type == 'in_invoice' and m.payment_state not in ('paid', 'in_payment')
+        )
+
+    def _get_unpaid_customer_invoices(self):
+        if not self.sale_order_id:
+            return self.env['account.move']
+        return self.sale_order_id.invoice_ids.filtered(
+            lambda m: m.move_type == 'out_invoice' and m.payment_state not in ('paid', 'in_payment')
+        )
+
     # --- po_created → releasing ---
     def action_request_release(self):
         self.ensure_one()
+        # Path A (sell_whole): ลูกค้าต้องจ่ายครบก่อนขอปล่อยรถ
+        if self.decision == 'sell_whole':
+            unpaid = self._get_unpaid_customer_invoices()
+            if unpaid:
+                names = ', '.join(unpaid.mapped('display_name'))
+                raise UserError(
+                    f'ลูกค้ายังจ่ายเงินไม่ครบ ไม่สามารถขอใบปล่อยได้\n'
+                    f'Invoice ค้างจ่าย: {names}'
+                )
         self.write({
             'release_request_date': fields.Date.context_today(self),
             'state': 'releasing',
@@ -436,9 +634,6 @@ class ItxRevivalAcquired(models.Model):
             raise UserError('ต้องอยู่สถานะ Releasing ก่อน')
         if not self.purchase_order_id:
             raise UserError('ไม่มี Purchase Order ผูกไว้')
-        self._ensure_product()
-        if not self.vin:
-            raise UserError('กรุณาระบุ VIN ก่อน Confirm Stock')
 
         picking = self.purchase_order_id.picking_ids.filtered(
             lambda p: p.picking_type_id.code == 'incoming' and p.state not in ('done', 'cancel')
@@ -446,52 +641,7 @@ class ItxRevivalAcquired(models.Model):
         if not picking:
             raise UserError('ไม่พบ Incoming Picking ที่ยังไม่ done ของ PO นี้')
 
-        vehicle_move = picking.move_ids.filtered(
-            lambda m: m.product_id.id == self.product_id.id
-        )[:1]
-        if not vehicle_move:
-            raise UserError('ไม่พบ move ของ Vehicle Product ใน Picking')
-
-        if picking.state == 'draft':
-            picking.action_confirm()
-        picking.action_assign()
-
-        StockLot = self.env['stock.lot']
-        lot = StockLot.search([
-            ('name', '=', self.vin),
-            ('product_id', '=', self.product_id.id),
-            ('company_id', '=', self.env.company.id),
-        ], limit=1)
-        if not lot:
-            lot = StockLot.create({
-                'name': self.vin,
-                'product_id': self.product_id.id,
-                'company_id': self.env.company.id,
-                'itx_vin': self.vin,
-                'itx_acquired_id': self.id,
-            })
-        elif not lot.itx_acquired_id:
-            lot.write({'itx_vin': self.vin, 'itx_acquired_id': self.id})
-
-        move_lines = vehicle_move.move_line_ids
-        if not move_lines:
-            self.env['stock.move.line'].create({
-                'move_id': vehicle_move.id,
-                'product_id': self.product_id.id,
-                'product_uom_id': vehicle_move.product_uom.id,
-                'location_id': vehicle_move.location_id.id,
-                'location_dest_id': vehicle_move.location_dest_id.id,
-                'lot_id': lot.id,
-                'quantity': 1.0,
-                'picking_id': picking.id,
-            })
-        else:
-            first = move_lines[0]
-            first.write({'lot_id': lot.id, 'quantity': 1.0})
-            (move_lines - first).unlink()
-
-        vehicle_move.picked = True
-        picking.button_validate()
+        self._prefill_picking_vin_lot(picking)
         self.state = 'stocked'
 
     # --- stocked → dismantling (Path B) ---
@@ -521,6 +671,16 @@ class ItxRevivalAcquired(models.Model):
     # --- releasing → delivered (Path A: ลูกค้ารับรถ dropship) ---
     def action_delivered(self):
         self.ensure_one()
+        if self.sale_order_id:
+            pickings = self.sale_order_id.picking_ids.filtered(
+                lambda p: p.state != 'done'
+            )
+            if pickings:
+                names = ', '.join(pickings.mapped('display_name'))
+                raise UserError(
+                    f'ยังมี Delivery Order ที่ยัง validate ไม่เสร็จ\n'
+                    f'กรุณา validate ก่อน: {names}'
+                )
         self.write({
             'delivery_date': fields.Date.context_today(self),
             'state': 'delivered',
@@ -536,9 +696,30 @@ class ItxRevivalAcquired(models.Model):
     # --- settling → closed ---
     def action_close(self):
         self.ensure_one()
-        if not self.payment_to_insurance_date:
-            raise UserError('กรุณาระบุวันที่โอนค่าซากให้ประกัน')
+        errors = []
+        # ตรวจ Vendor Bill (จ่ายค่าซากให้ประกัน)
+        unpaid_bills = self._get_unpaid_vendor_bills()
+        if unpaid_bills:
+            names = ', '.join(unpaid_bills.mapped('display_name'))
+            errors.append(f'Vendor Bill ยังไม่จ่าย: {names}')
+        elif not self.purchase_order_id.invoice_ids.filtered(lambda m: m.move_type == 'in_invoice'):
+            errors.append('ยังไม่มี Vendor Bill (ยังไม่ได้จ่ายค่าซากให้ประกัน)')
+        # ตรวจ Customer Invoice (รับเงินจากลูกค้า) — เฉพาะ sell_whole
+        if self.decision == 'sell_whole':
+            unpaid_inv = self._get_unpaid_customer_invoices()
+            if unpaid_inv:
+                names = ', '.join(unpaid_inv.mapped('display_name'))
+                errors.append(f'Customer Invoice ยังไม่รับเงิน: {names}')
+        if errors:
+            raise UserError('ไม่สามารถปิดเคสได้:\n• ' + '\n• '.join(errors))
         self.state = 'closed'
+
+    # --- any state → draft (reset for testing) ---
+    def action_reset_draft(self):
+        self.ensure_one()
+        if self.state == 'draft':
+            return
+        self.write({'state': 'draft'})
 
     # === Navigation ===
     def action_view_po(self):
@@ -565,4 +746,48 @@ class ItxRevivalAcquired(models.Model):
             'res_id': self.sale_order_id.id,
             'view_mode': 'form',
             'target': 'current',
+        }
+
+    def action_view_vendor_bill(self):
+        self.ensure_one()
+        bills = self.purchase_order_id.invoice_ids.filtered(
+            lambda m: m.move_type == 'in_invoice'
+        )
+        if len(bills) == 1:
+            return {
+                'type': 'ir.actions.act_window',
+                'name': 'Vendor Bill',
+                'res_model': 'account.move',
+                'res_id': bills.id,
+                'view_mode': 'form',
+                'target': 'current',
+            }
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Vendor Bills',
+            'res_model': 'account.move',
+            'view_mode': 'list,form',
+            'domain': [('id', 'in', bills.ids)],
+        }
+
+    def action_view_customer_invoice(self):
+        self.ensure_one()
+        invoices = self.sale_order_id.invoice_ids.filtered(
+            lambda m: m.move_type == 'out_invoice'
+        )
+        if len(invoices) == 1:
+            return {
+                'type': 'ir.actions.act_window',
+                'name': 'Customer Invoice',
+                'res_model': 'account.move',
+                'res_id': invoices.id,
+                'view_mode': 'form',
+                'target': 'current',
+            }
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Customer Invoices',
+            'res_model': 'account.move',
+            'view_mode': 'list,form',
+            'domain': [('id', 'in', invoices.ids)],
         }

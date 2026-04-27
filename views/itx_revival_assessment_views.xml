@@ -9,7 +9,7 @@
             <list string="Assessments"
                   decoration-info="state == 'draft'"
                   decoration-warning="state == 'offering'"
-                  decoration-success="state in ('assessed', 'sold', 'dismantle')"
+                  decoration-success="state in ('assessed', 'sold', 'sold_paid', 'dismantle')"
                   decoration-muted="state == 'returned'">
                 <field name="name"/>
                 <field name="assessment_date"/>
@@ -21,18 +21,25 @@
                 <field name="model_id" optional="hide"/>
                 <field name="body_type_id"/>
                 <field name="assessor_id" optional="show"/>
-                <field name="insurance_value" optional="hide"/>
-                <field name="is_parking_reported" optional="hide"/>
+                <field name="insurance_value" optional="show"/>
+                <field name="price_reported" optional="hide" string="15%"/>
+                <field name="price_not_reported" optional="hide" string="25%"/>
+                <field name="registration_book_status" optional="hide"/>
                 <field name="suggested_price" optional="show"/>
                 <field name="target_price" optional="show"/>
-                <field name="expected_revenue" optional="hide"/>
-                <field name="expected_roi" widget="percentage" optional="hide"/>
+                <field name="expected_revenue" optional="hide" string="รายได้ (แยกซาก)"/>
+                <field name="expected_roi" widget="percentage" optional="hide" string="ROI (แยกซาก)"/>
+                <field name="offering_sale_price" optional="hide" string="ราคาขาย (ยกคัน)"/>
+                <field name="whole_car_roi" widget="percentage" optional="hide" string="ROI (ยกคัน)"/>
+                <field name="recommended_path" optional="hide" widget="badge"
+                       decoration-success="recommended_path in ('path_a', 'path_b')"
+                       decoration-danger="recommended_path == 'no_buy'"/>
                 <field name="offering_deadline" optional="hide"/>
                 <field name="decision" optional="show"/>
                 <field name="state" widget="badge"
                        decoration-info="state == 'draft'"
                        decoration-warning="state == 'offering'"
-                       decoration-success="state in ('assessed', 'sold', 'dismantle')"
+                       decoration-success="state in ('assessed', 'sold', 'sold_paid', 'dismantle')"
                        decoration-danger="state == 'returned'"/>
             </list>
         </field>
@@ -77,7 +84,7 @@
 
                     <!-- === offering: wait state === -->
                     <button name="action_sold" type="object"
-                            string="Sold (ลูกค้าจ่ายครบ)" class="oe_highlight"
+                            string="Sold (ตกลงขาย → สร้าง SO)" class="oe_highlight"
                             invisible="state != 'offering'"/>
                     <button name="action_offering_dismantle" type="object"
                             string="Change to Dismantle (เปลี่ยนใจแยก)"
@@ -87,18 +94,24 @@
                             invisible="state != 'offering'"
                             confirm="ยืนยันคืนรถให้ประกัน?"/>
 
-                    <!-- === sold / dismantle: สร้าง Acquired === -->
+                    <!-- === sold: รอจ่ายเงิน === -->
+                    <button name="action_sold_paid" type="object"
+                            string="Sold &amp; Paid (จ่ายครบ)" class="oe_highlight"
+                            invisible="state != 'sold'"/>
+
+                    <!-- === dismantle: สร้าง Acquired (Path B only) === -->
                     <button name="action_create_acquired" type="object"
                             string="Create Acquired Vehicle" class="oe_highlight"
-                            invisible="state not in ('sold', 'dismantle') or acquired_id"/>
+                            invisible="state != 'dismantle' or acquired_id"/>
 
-                    <!-- === returned: reset === -->
+                    <!-- === cancel / reset to draft === -->
                     <button name="action_reset_draft" type="object"
                             string="Reset to Draft"
-                            invisible="state != 'returned'"/>
+                            invisible="state == 'draft'"
+                            confirm="Reset กลับ Draft? (ข้อมูลที่กรอกไว้จะไม่หาย)"/>
 
                     <field name="state" widget="statusbar"
-                           statusbar_visible="draft,assessed,offering,sold,dismantle"/>
+                           statusbar_visible="draft,assessed,offering,sold,sold_paid,dismantle"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
@@ -111,6 +124,11 @@
                                 type="object" name="action_view_images"
                                 invisible="image_count == 0">
                             <field name="image_count" widget="statinfo" string="Images"/>
+                        </button>
+                        <button class="oe_stat_button" icon="fa-car"
+                                type="object" name="action_view_acquired"
+                                invisible="not acquired_id">
+                            <span class="o_stat_text">Acquired</span>
                         </button>
                     </div>
                     <field name="image_main" widget="image" class="oe_avatar"
@@ -156,7 +174,6 @@
                                    options="{'no_create': True}"/>
                             <field name="ecf_claim_number"/>
                             <field name="claim_date"/>
-                            <field name="registration_book_status"/>
                             <field name="company_currency_id" invisible="1"/>
                         </group>
                         <group string="Assessment">
@@ -167,20 +184,66 @@
                         </group>
                     </group>
 
-                    <!-- Row 3: Pricing + Expected ROI -->
+                    <!-- Row 3: Pricing + Cost -->
                     <group>
                         <group string="Pricing (ราคาเสนอซื้อซาก)">
                             <field name="insurance_value"/>
-                            <field name="is_parking_reported"/>
+                            <field name="price_reported" readonly="1"
+                                   string="ราคา 15% (แจ้งจอด)"/>
+                            <field name="price_not_reported" readonly="1"
+                                   string="ราคา 25% (ไม่แจ้งจอด)"/>
+                            <separator string="ราคาจริง (ตามสถานะเล่ม)"/>
+                            <field name="registration_book_status"/>
                             <field name="suggested_price" readonly="1"/>
                             <field name="asking_price"/>
+                        </group>
+                        <group string="Cost Estimation (ประมาณต้นทุน)">
                             <field name="target_price"/>
+                            <field name="offering_sale_price"
+                                   string="ราคาขายยกคัน (ถ้าขาย)"/>
+                            <separator string="ค่าดำเนินการ (โดยประมาณ)"/>
+                            <field name="whole_car_op_cost"/>
+                            <field name="dismantle_op_cost"/>
                         </group>
-                        <group string="Expected ROI">
+                    </group>
+
+                    <!-- Row 3.5: ROI Comparison (Path A vs Path B) -->
+                    <group string="ROI Analysis (เปรียบเทียบ 2 ทาง)">
+                        <group string="Path A: ขายยกคัน">
+                            <field name="whole_car_revenue" readonly="1"/>
+                            <field name="whole_car_total_cost" readonly="1"/>
+                            <field name="whole_car_profit" readonly="1"
+                                   decoration-success="whole_car_profit &gt; 0"
+                                   decoration-danger="whole_car_profit &lt; 0"/>
+                            <field name="whole_car_roi" readonly="1" widget="percentage"
+                                   decoration-success="whole_car_meets_target"
+                                   decoration-danger="not whole_car_meets_target"/>
+                            <field name="whole_car_meets_target" readonly="1"
+                                   widget="boolean_toggle" invisible="1"/>
+                        </group>
+                        <group string="Path B: แยกซาก">
                             <field name="expected_revenue" readonly="1"/>
-                            <field name="expected_profit" readonly="1"/>
-                            <field name="expected_roi" readonly="1" widget="percentage"/>
+                            <field name="dismantle_total_cost" readonly="1"/>
+                            <field name="expected_profit" readonly="1"
+                                   decoration-success="expected_profit &gt; 0"
+                                   decoration-danger="expected_profit &lt; 0"/>
+                            <field name="expected_roi" readonly="1" widget="percentage"
+                                   decoration-success="dismantle_meets_target"
+                                   decoration-danger="not dismantle_meets_target"/>
+                            <field name="dismantle_meets_target" readonly="1"
+                                   widget="boolean_toggle" invisible="1"/>
                         </group>
+                    </group>
+
+                    <!-- Recommendation -->
+                    <group>
+                        <group>
+                            <field name="recommended_path" readonly="1"
+                                   decoration-success="recommended_path in ('path_a', 'path_b')"
+                                   decoration-danger="recommended_path == 'no_buy'"
+                                   widget="badge"/>
+                        </group>
+                        <group/>
                     </group>
 
                     <!-- Row 4: Decision (visible after assessed) -->
@@ -190,6 +253,7 @@
                             <field name="decision" readonly="1"/>
                             <field name="decision_date" readonly="1"/>
                             <field name="decision_by" readonly="1"/>
+                            <field name="decision_reason"/>
                         </group>
                         <group>
                             <field name="decision_note"
@@ -197,21 +261,24 @@
                         </group>
                     </group>
 
-                    <!-- Row 5: Offering details (visible in offering/sold) -->
+                    <!-- Row 5: Offering details (visible in offering/sold/sold_paid) -->
                     <group string="Offering (ขายยกคัน)"
-                           invisible="state not in ('assessed', 'offering', 'sold')">
+                           invisible="state not in ('assessed', 'offering', 'sold', 'sold_paid')">
                         <group>
                             <field name="offering_deadline"
                                    readonly="state not in ('assessed', 'offering')"/>
                             <field name="offering_start_date" readonly="1"/>
                             <field name="is_offering_expired"
                                    invisible="state != 'offering'"/>
+                            <field name="suggested_sale_price" readonly="1"/>
                         </group>
                         <group>
                             <field name="offering_customer_id"
                                    readonly="state not in ('offering',)"/>
-                            <field name="offering_sale_price"
+                            <field name="agreed_sale_price"
                                    readonly="state not in ('offering',)"/>
+                            <field name="sale_order_id" readonly="1"
+                                   invisible="not sale_order_id"/>
                         </group>
                     </group>
 
@@ -306,6 +373,8 @@
                         domain="[('state', '=', 'offering')]"/>
                 <filter string="Sold" name="filter_sold"
                         domain="[('state', '=', 'sold')]"/>
+                <filter string="Sold &amp; Paid" name="filter_sold_paid"
+                        domain="[('state', '=', 'sold_paid')]"/>
                 <filter string="To Dismantle" name="filter_dismantle"
                         domain="[('state', '=', 'dismantle')]"/>
                 <filter string="Returned" name="filter_returned"
@@ -316,10 +385,10 @@
                 <filter string="Offering Expired" name="filter_expired"
                         domain="[('is_offering_expired', '=', True), ('state', '=', 'offering')]"/>
                 <separator/>
-                <filter string="Parking Reported (15%)" name="filter_parking_reported"
-                        domain="[('is_parking_reported', '=', True)]"/>
-                <filter string="Not Reported (25%)" name="filter_not_reported"
-                        domain="[('is_parking_reported', '=', False)]"/>
+                <filter string="แจ้งจอด (15%)" name="filter_parking_stamped"
+                        domain="[('registration_book_status', '=', 'parking_stamped')]"/>
+                <filter string="ปกติ/ไม่ทราบ (25%)" name="filter_not_stamped"
+                        domain="[('registration_book_status', 'in', ('clean', 'unknown'))]"/>
                 <separator/>
                 <filter string="Archived" name="filter_archived"
                         domain="[('active', '=', False)]"/>
